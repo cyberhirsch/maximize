@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shortcut Comparison</title>
+<style>
+  :root {
+    --bg: #f6f7f8; --surface: #ffffff; --text: #1d2024; --muted: #6b7178; --line: #e1e4e8;
+    --group: #eef0f2; --keybg: #f1f3f5; --accent: #2f6fdb;
+    --b2: #dbe8fa; --b3: #b9d3f5; --b4: #8db8ee;
+    --c1: rgba(220, 45, 60, .16); --c2: rgba(220, 45, 60, .30); --c3: rgba(220, 45, 60, .44);
+    --heat: #2f6fdb; --zone: #d98a00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #121417; --surface: #1a1d21; --text: #e6e8eb; --muted: #969ca4; --line: #2c3036;
+      --group: #22262b; --keybg: #23272c; --accent: #5b9bf2;
+      --b2: #1b2c44; --b3: #21406a; --b4: #2b5592;
+      --c1: rgba(255, 80, 95, .20); --c2: rgba(255, 80, 95, .34); --c3: rgba(255, 80, 95, .48);
+      --heat: #4d8ff0; --zone: #f0a830;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #121417; --surface: #1a1d21; --text: #e6e8eb; --muted: #969ca4; --line: #2c3036;
+    --group: #22262b; --keybg: #23272c; --accent: #5b9bf2;
+    --b2: #1b2c44; --b3: #21406a; --b4: #2b5592;
+    --c1: rgba(255, 80, 95, .20); --c2: rgba(255, 80, 95, .34); --c3: rgba(255, 80, 95, .48);
+    --heat: #4d8ff0; --zone: #f0a830;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 Inter, "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 1280px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 0 0 8px; }
+  p.sub { margin: 0 0 16px; color: var(--muted); }
+  code, .mono { font-family: "JetBrains Mono", Consolas, monospace; }
+
+  .bar { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; margin-bottom: 12px; }
+  .seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: var(--surface); }
+  .seg button { border: 0; background: none; color: var(--text); font: inherit; font-size: 13px; padding: 6px 12px; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button.on { background: var(--accent); color: #fff; }
+  .switch { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; user-select: none; }
+  .switch input { position: absolute; opacity: 0; pointer-events: none; }
+  .track { width: 34px; height: 20px; border-radius: 10px; background: var(--line); position: relative; transition: background .15s; flex: none; }
+  .track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left .15s; box-shadow: 0 1px 2px rgba(0,0,0,.3); }
+  .switch input:checked + .track { background: var(--accent); }
+  .switch input:checked + .track::after { left: 16px; }
+  .switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .sw { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: -2px; margin-right: 4px; border: 1px solid var(--line); }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); font-size: 12.5px; margin-bottom: 12px; }
+  .stats { color: var(--muted); font-size: 13px; }
+
+  .wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; }
+  #grid { min-width: 900px; }
+  th, td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  thead th { position: sticky; top: 0; background: var(--surface); font-size: 12px; color: var(--muted); font-weight: 600; z-index: 1; }
+  th button { all: unset; cursor: pointer; color: var(--accent); font-weight: 600; }
+  th button:hover { text-decoration: underline; }
+  th button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  th.base { color: var(--text); }
+  td.action { font-weight: 500; white-space: nowrap; }
+  td.key { font-family: "JetBrains Mono", Consolas, monospace; font-size: 12.5px; }
+  td.what { font-size: 13px; }
+  td.none { color: var(--muted); }
+  td.m2 { background-color: var(--b2); }
+  td.m3 { background-color: var(--b3); }
+  td.m4 { background-color: var(--b4); }
+  td.c1 { background-image: linear-gradient(var(--c1), var(--c1)); }
+  td.c2 { background-image: linear-gradient(var(--c2), var(--c2)); }
+  td.c3 { background-image: linear-gradient(var(--c3), var(--c3)); }
+  tr.group td { background: var(--group); font-weight: 600; font-size: 12px; letter-spacing: .02em; color: var(--muted); }
+  .note { color: var(--muted); font-family: Inter, "Segoe UI", system-ui, sans-serif; font-size: 11.5px; }
+
+  .cards { display: grid; gap: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+  .card .meta { color: var(--muted); font-size: 12.5px; margin-bottom: 10px; }
+  .kbwrap { overflow-x: auto; padding-bottom: 4px; }
+  .kb { position: relative; --u: 34px; width: calc(22.75 * var(--u)); height: calc(6.5 * var(--u)); }
+  .k { position: absolute; border-radius: 4px; background: var(--keybg); border: 1px solid var(--line);
+       font-size: 10px; line-height: 1.1; padding: 3px 4px; overflow: hidden; color: var(--muted); }
+  .k b { position: absolute; right: 4px; bottom: 2px; font-size: 11px; color: inherit; }
+  .k.hot { color: var(--text); }
+  .k.hot.strong { color: #fff; }
+  .k.zone { box-shadow: inset 0 0 0 2px var(--zone); }
+  .summary td, .summary th { font-size: 13px; }
+  .summary td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .meter { height: 8px; border-radius: 4px; background: var(--keybg); min-width: 120px; position: relative; }
+  .meter i { position: absolute; inset: 0 auto 0 0; border-radius: 4px; background: var(--heat); }
+  footer { margin-top: 16px; color: var(--muted); font-size: 12.5px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Shortcut comparison: the most-used 3ds Max actions</h1>
+  <p class="sub">Defaults in 3ds Max 2026, Maya 2026, Unreal Engine 5.6/5.7, Blender 5.3 and Blender's Industry Compatible (IC) keymap.
+    Data from <code>docs/shortcuts.md</code>.</p>
+
+  <div class="bar">
+    <div class="seg" id="viewSeg" role="group" aria-label="View">
+      <button data-view="action">By action</button>
+      <button data-view="key">By key</button>
+      <button data-view="keyboard">Keyboard heatmap</button>
+    </div>
+    <div class="seg" id="baseSeg" role="group" aria-label="Program whose keys are listed"></div>
+  </div>
+
+  <div class="bar" id="tableSwitches">
+    <label class="switch"><input type="checkbox" id="swMatch" checked><span class="track"></span>Same key (blue)</label>
+    <label class="switch"><input type="checkbox" id="swConf" checked><span class="track"></span>Conflicts (red)</label>
+    <label class="switch"><input type="checkbox" id="swHide"><span class="track"></span>Hide rows without highlights</label>
+    <span class="stats" id="stats"></span>
+  </div>
+  <div class="bar" id="kbSwitches" hidden>
+    <label class="switch"><input type="checkbox" id="swZone" checked><span class="track"></span>Left-hand zone</label>
+    <label class="switch"><input type="checkbox" id="swMods" checked><span class="track"></span>Count modifiers</label>
+  </div>
+
+  <div class="legend" id="tableLegend">
+    <span><span class="sw" style="background:var(--b2)"></span><span class="sw" style="background:var(--b3)"></span><span class="sw" style="background:var(--b4)"></span>same key for the same action in 2 / 3 / 4–5 programs</span>
+    <span><span class="sw" style="background-image:linear-gradient(var(--c1),var(--c1))"></span><span class="sw" style="background-image:linear-gradient(var(--c2),var(--c2))"></span><span class="sw" style="background-image:linear-gradient(var(--c3),var(--c3))"></span>the key does something else in 1 / 2 / 3+ programs</span>
+    <span><span class="sw" style="background-color:var(--b3);background-image:linear-gradient(var(--c2),var(--c2))"></span>both</span>
+    <span>Hover a cell for details · † secondary source</span>
+  </div>
+
+  <section id="tableView">
+    <div class="wrap"><table id="grid"><thead id="head"></thead><tbody id="rows"></tbody></table></div>
+  </section>
+
+  <section id="keyboardView" hidden>
+    <div class="card" style="margin-bottom:16px">
+      <h2>Left hand or not?</h2>
+      <div class="meta">The mouse sits in the right hand, so keys under the left hand can be pressed without letting go of it.
+        The left-hand zone is <span class="mono">Esc F1–F4 ` 1–5 Q–T A–G Z–B</span> plus Tab, Caps, left Shift/Ctrl/Alt and Space.
+        Distance is measured in key widths from the nearest of <span class="mono">A S D F</span>. Modifiers are not counted here.</div>
+      <div class="wrap"><table class="summary"><thead><tr><th>Program</th><th>Key bindings</th><th>On the left hand</th><th></th><th>Avg. distance from ASDF</th><th>Mouse only</th></tr></thead><tbody id="summary"></tbody></table></div>
+    </div>
+    <div class="cards" id="kbCards"></div>
+  </section>
+
+  <footer>Compares the same 66 actions in each program: the ones 3ds Max users press most. Keys are compared one by one
+    (for example, “Ctrl+Z / Ctrl+Y” is two keys). A conflict means the same key is bound to a different action in this list,
+    so keys outside these 66 actions are not checked. Click a program name in a table header to see what its keys do elsewhere.</footer>
+</main>
+<script>
+const PROGS = ["3ds Max", "Maya", "Unreal", "Blender", "Blender IC"];
+
+// Each cell: "display text" or ["display text", "key1", "key2", ...] when the comparable keys differ from the text.
+// A key may hold several keys separated by " / ". "" means no default shortcut.
+const DATA = [
+  ["Navigation"],
+  ["Pan", "MMB drag", "Alt+MMB drag", ["MMB drag; Alt+MMB drag", "MMB drag", "Alt+MMB drag"], "Shift+MMB drag", "Alt+MMB drag"],
+  ["Orbit", "Alt+MMB drag", "Alt+LMB drag", "Alt+LMB drag", "MMB drag", "Alt+LMB drag"],
+  ["Zoom (drag)", "Ctrl+Alt+MMB drag", "Alt+RMB drag", "Alt+RMB drag", "Ctrl+MMB drag", "Alt+RMB drag"],
+  ["Zoom (wheel)", "Wheel", "", "Wheel", "Wheel", "Wheel"],
+  ["Frame selected", ["Z <span class=note>Zoom Extents Selected</span>", "Z"], "F", "F", "Num .", "F"],
+  ["Frame all, all views", ["Ctrl+Shift+Z <span class=note>Zoom Extents All</span>", "Ctrl+Shift+Z"], "Shift+A", "", "Ctrl+Home", "Shift+A"],
+  ["Maximize viewport", "Alt+W", "Ctrl+Space", ["F11 <span class=note>immersive</span>", "F11"], "Ctrl+Space", ""],
+  ["Top view", "T", "", "Alt+J †", "Num 7", "F3"],
+  ["Front view", "F", "", "Alt+H †", "Num 1", "F1"],
+  ["Left view", "L", "", "Alt+K †", "Ctrl+Num 3", "Ctrl+F2"],
+  ["Perspective view", "P", "", "Alt+G †", ["Num 5 <span class=note>persp/ortho toggle</span>", "Num 5"], ""],
+  ["Camera view", "C", "", "", "Num 0", "F4"],
+
+  ["Selection and transform"],
+  ["Select tool", "Q", "Q", "Q", ["W <span class=note>cycles select tools</span>", "W"], "Q"],
+  ["Move", "W", "W", "W", ["G <span class=note>modal</span>", "G"], "W"],
+  ["Rotate", "E", "E", "E", ["R <span class=note>modal</span>", "R"], "E"],
+  ["Scale", "R", "R", "R", ["S <span class=note>modal</span>", "S"], "R"],
+  ["Select by name", "H", "", "", "", ""],
+  ["Select all", "Ctrl+A", "", "", "A", "Ctrl+A"],
+  ["Deselect all", "Ctrl+D", "", "", "Alt+A", "Ctrl+Shift+A"],
+  ["Invert selection", "Ctrl+I", "", "", "Ctrl+I", "Ctrl+I"],
+  ["Add to selection", "Ctrl+click", "Ctrl+Shift+click", ["Ctrl+click or Shift+click", "Ctrl+click", "Shift+click"], ["Shift+click <span class=note>toggle</span>", "Shift+click"], ["Shift+click <span class=note>toggle</span>", "Shift+click"]],
+  ["Remove from selection", "Alt+click", "Ctrl+click", "", ["Shift+click <span class=note>toggle</span>", "Shift+click"], ["Ctrl+LMB drag <span class=note>box</span>", "Ctrl+LMB drag"]],
+  ["Clone while transforming", "Shift+drag", "Shift+drag", "Alt+LMB drag", ["Shift+D <span class=note>duplicate, then move</span>", "Shift+D"], "Ctrl+D"],
+  ["Transform Type-In", "F12", "", "", ["<span class=note>type a number during transform</span>", "type"], ["<span class=note>type a number during transform</span>", "type"]],
+  ["Affect Pivot Only", "Insert", ["D [hold] + drag; Insert", "D hold", "Insert"], ["MMB drag on pivot <span class=note>temporary</span>", "MMB pivot"], ["Ctrl+. <span class=note>affect only origins</span>", "Ctrl+."], ""],
+  ["Align", "Alt+A", "", ["End <span class=note>snap to floor</span>", "End"], "", ""],
+  ["Snaps toggle", "S", "", "", "Shift+Tab", "X"],
+  ["Angle snap", "A", "", "", "", ""],
+  ["Constrain to X / Y / Z", "F5 / F6 / F7", "", "", ["X / Y / Z <span class=note>during transform</span>", "X / Y / Z"], ["X / Y / Z <span class=note>during transform</span>", "X / Y / Z"]],
+
+  ["Display"],
+  ["Wireframe / shaded", "F3", ["Alt+5 <span class=note>toggle; 4 wire, 5 shaded</span>", "Alt+5"], "Alt+2 / Alt+4", ["Shift+Z <span class=note>wireframe toggle</span>", "Shift+Z"], ""],
+  ["Edged faces", "F4", "", "", "", ""],
+  ["See-through / X-ray", "Alt+X", "", "", "Alt+Z", "Alt+X"],
+  ["Isolate selection", "Alt+Q", "Ctrl+1", "", ["/ <span class=note>local view</span>", "/"], "Shift+I"],
+  ["Hide selected", "Alt+H", "Ctrl+H", "H", "H", "Ctrl+H"],
+  ["Unhide all", "Alt+U", "Shift+H", "Ctrl+H", "Alt+H", "Alt+H"],
+  ["Grid / overlays", ["G <span class=note>grid</span>", "G"], "", "", ["Alt+Shift+Z <span class=note>overlays</span>", "Alt+Shift+Z"], ""],
+  ["Statistics", "7", "", "Ctrl+L †", "", ""],
+
+  ["Modeling (Editable Poly)"],
+  ["Vertex / edge / face level", ["1 / 2 / 4 <span class=note>(3 border, 5 element)</span>", "1 / 2 / 4"], "F9 / F10 / F11", "", "1 / 2 / 3", "1 / 2 / 3"],
+  ["Loop select", "Alt+L", "", "", "Alt+click", "LMB double-click"],
+  ["Ring select", "Alt+R", "", "", "Ctrl+Alt+click", "Alt+LMB double-click"],
+  ["Grow / shrink selection", "Ctrl+PgUp / Ctrl+PgDn", "> / <", "", "Ctrl+Num+ / Ctrl+Num−", "Up / Down"],
+  ["Extrude", "Shift+E", "Ctrl+E", "", "E", "Ctrl+E"],
+  ["Chamfer edges", "Ctrl+Shift+C", "", "", ["Ctrl+B <span class=note>bevel edges</span>", "Ctrl+B"], "Ctrl+B"],
+  ["Bevel polygons", "Ctrl+Shift+B", "", "", "", ""],
+  ["Inset", ["Shift+drag with Scale <span class=note>Edit Poly</span>", "Shift+Scale"], "", "", "I", "I"],
+  ["Connect", "Ctrl+Shift+E", "", "", ["J <span class=note>vertex connect path</span>", "J"], ""],
+  ["Cut / knife", "Alt+C", ["Ctrl+Shift+X <span class=note>Multi-Cut</span>", "Ctrl+Shift+X"], "", "K", "K"],
+  ["Swift Loop / loop cut", "Alt+1", ["Ctrl+click <span class=note>in Multi-Cut</span>", "Ctrl+click MC"], "", "Ctrl+R", "Alt+C"],
+  ["Target Weld / merge", "Ctrl+Shift+W", "", "", ["M <span class=note>merge menu</span>", "M"], ""],
+  ["Collapse", "Ctrl+Alt+C", "", "", ["M <span class=note>merge menu, At Center</span>", "M"], ""],
+  ["Repeat last", ";", "G", "", "Shift+R", "G"],
+
+  ["Scene, rendering, animation"],
+  ["Undo / redo", "Ctrl+Z / Ctrl+Y", "Ctrl+Z / Ctrl+Y", "Ctrl+Z / Ctrl+Y", "Ctrl+Z / Ctrl+Shift+Z", "Ctrl+Z / Ctrl+Shift+Z"],
+  ["Save", "Ctrl+S", "Ctrl+S", "Ctrl+S", "Ctrl+S", "Ctrl+S"],
+  ["Save incremental", "Ctrl+Alt+S", "", "", "Ctrl+Alt+S", "Ctrl+Alt+S"],
+  ["Delete", "Del", "", ["Delete †", "Del"], ["X or Del", "X", "Del"], ["Backspace or Del", "Backspace", "Del"]],
+  ["Material editor", "M", "", "", ["Shift+F3 <span class=note>node editor</span>", "Shift+F3"], ""],
+  ["Render", ["Shift+Q or Shift+F9", "Shift+Q", "Shift+F9"], "", "", "F12", "Ctrl+Enter"],
+  ["Render last", "F9", "", "", "", ""],
+  ["Render setup", "F10", "", "", "", ""],
+  ["Set key", "K", "S", "S", ["I <span class=note>insert keyframe</span>", "I"], "S"],
+  ["Auto Key", "N", "", "", "", ""],
+  ["Play animation", "/", "Alt+V", "Space", "Space", "Space"],
+  ["Next / previous frame", ". / ,", "Alt+. / Alt+,", "Right / Left", "Right / Left", "Right / Left"],
+  ["Go to start / end", "Home / End", ["Alt+Shift+V <span class=note>start</span>", "Alt+Shift+V"], "Up / Ctrl+Up", "Shift+Left / Shift+Right", "Ctrl+Left / Ctrl+Right"],
+  ["Context menu", ["RMB <span class=note>quad menu</span>", "RMB"], ["RMB <span class=note>marking menu</span>", "RMB"], ["RMB <span class=note>Blueprint graph</span>", "RMB"], "RMB", "RMB"],
+  ["Command search", ["X <span class=note>Global Search</span>", "X"], "", "", "F3", "Tab"],
+];
+
+// ---- Model -------------------------------------------------------------------------------
+
+const norm = (k) => k.replace(/\s+/g, "").toLowerCase();
+const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+function parseCell(c) {
+  if (!c) return { html: "—", atoms: [] };
+  const raw = Array.isArray(c) ? c.slice(1) : [c];
+  const atoms = [];
+  for (const r of raw) {
+    for (const part of r.split(" / ")) {
+      const label = part.replace(/†/g, "").trim();
+      if (label && !atoms.some((a) => a.key === norm(label))) atoms.push({ label, key: norm(label) });
+    }
+  }
+  return { html: Array.isArray(c) ? c[0] : c, atoms };
+}
+
+const ACTIONS = [];
+{
+  let group = "";
+  for (const row of DATA) {
+    if (row.length === 1) { group = row[0]; continue; }
+    ACTIONS.push({ name: row[0], group, cells: row.slice(1).map(parseCell) });
+  }
+}
+
+// BIND[p]: key -> { label, acts: Set(action index) }, in table order.
+const BIND = PROGS.map(() => new Map());
+ACTIONS.forEach((a, ai) => a.cells.forEach((cell, p) => {
+  for (const atom of cell.atoms) {
+    if (!BIND[p].has(atom.key)) BIND[p].set(atom.key, { label: atom.label, acts: new Set() });
+    BIND[p].get(atom.key).acts.add(ai);
+  }
+}));
+
+const actNames = (set) => [...set].map((i) => ACTIONS[i].name).join(", ");
+
+function analyse(ai, p) {
+  const cell = ACTIONS[ai].cells[p];
+  const keys = new Set(cell.atoms.map((a) => a.key));
+  const same = [], conflicts = [], confProgs = new Set();
+  PROGS.forEach((name, q) => {
+    if (q === p) return;
+    if (ACTIONS[ai].cells[q].atoms.some((a) => keys.has(a.key))) same.push(name);
+    for (const atom of cell.atoms) {
+      const e = BIND[q].get(atom.key);
+      if (e && !e.acts.has(ai)) {
+        conflicts.push(`${name}: ${atom.label} = ${actNames(e.acts)}`);
+        confProgs.add(q);
+      }
+    }
+  });
+  return { same, conflicts, confN: confProgs.size };
+}
+
+// ---- State -------------------------------------------------------------------------------
+
+const state = { view: "action", base: 0, match: true, conf: true, hide: false, zone: true, mods: true };
+try { Object.assign(state, JSON.parse(localStorage.getItem("shortcutCompare") || "{}")); } catch (e) {}
+const save = () => { try { localStorage.setItem("shortcutCompare", JSON.stringify(state)); } catch (e) {} };
+
+const matchClass = (n) => (!state.match || n < 2 ? "" : n >= 4 ? " m4" : n === 3 ? " m3" : " m2");
+const confClass = (n) => (!state.conf || n < 1 ? "" : n >= 3 ? " c3" : n === 2 ? " c2" : " c1");
+
+// ---- Table views -------------------------------------------------------------------------
+
+function renderHead() {
+  const head = document.getElementById("head");
+  const first = state.view === "action"
+    ? `<th><button data-go="key" title="Show what one program's keys do in the others">Action ⇄</button></th>`
+    : `<th><button data-go="action" title="Back to the comparison by action">Key ⇄</button></th>`;
+  const progs = PROGS.map((n, p) => {
+    const isBase = state.view === "key" && p === state.base;
+    return `<th class="${isBase ? "base" : ""}">${isBase ? n + " (keys)" : `<button data-base="${p}" title="List ${n}'s keys">${n}</button>`}</th>`;
+  }).join("");
+  head.innerHTML = `<tr>${first}${progs}</tr>`;
+}
+
+function groupRow(body, name) {
+  const tr = document.createElement("tr");
+  tr.className = "group";
+  tr.innerHTML = `<td colspan="6">${name}</td>`;
+  body.appendChild(tr);
+}
+
+function renderActionView() {
+  const body = document.getElementById("rows");
+  body.innerHTML = "";
+  let shared = 0, conflictCells = 0, lastGroup = null;
+  ACTIONS.forEach((a, ai) => {
+    const info = a.cells.map((_, p) => analyse(ai, p));
+    if (info.some((x) => x.same.length)) shared++;
+    let lit = false;
+    const tds = a.cells.map((cell, p) => {
+      if (!cell.atoms.length) return `<td class="key none">—</td>`;
+      const x = info[p];
+      if (x.confN) conflictCells++;
+      const cls = matchClass(x.same.length + 1) + confClass(x.confN);
+      if (cls) lit = true;
+      const tip = [x.same.length ? "Same key in: " + x.same.join(", ") : "", x.conflicts.length ? "Conflicts:\n" + x.conflicts.join("\n") : ""]
+        .filter(Boolean).join("\n");
+      return `<td class="key${cls}"${tip ? ` title="${esc(tip)}"` : ""}>${cell.html}</td>`;
+    });
+    if (state.hide && !lit) return;
+    if (a.group !== lastGroup) { groupRow(body, a.group); lastGroup = a.group; }
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td class="action">${a.name}</td>${tds.join("")}`;
+    body.appendChild(tr);
+  });
+  document.getElementById("stats").textContent =
+    `${shared} of ${ACTIONS.length} actions share a key between programs · ${conflictCells} cells have a conflicting key`;
+}
+
+function renderKeyView() {
+  const body = document.getElementById("rows");
+  body.innerHTML = "";
+  const b = state.base;
+  let lastGroup = null, sameN = 0, diffN = 0, total = 0;
+  for (const [key, base] of BIND[b]) {
+    if (["type", "shift+scale"].includes(key)) continue;
+    total++;
+    let lit = false, anySame = false, anyDiff = false;
+    const tds = PROGS.map((_, p) => {
+      if (p === b) return `<td class="what"><strong>${actNames(base.acts)}</strong></td>`;
+      const e = BIND[p].get(key);
+      if (!e) return `<td class="what none">—</td>`;
+      const same = [...e.acts].some((i) => base.acts.has(i));
+      const diff = [...e.acts].some((i) => !base.acts.has(i));
+      anySame ||= same; anyDiff ||= diff;
+      const cls = (same ? matchClass(3) : "") + (diff ? confClass(2) : "");
+      if (cls) lit = true;
+      return `<td class="what${cls}">${actNames(e.acts)}</td>`;
+    });
+    if (anySame) sameN++;
+    if (anyDiff) diffN++;
+    if (state.hide && !lit) continue;
+    const group = ACTIONS[[...base.acts][0]].group;
+    if (group !== lastGroup) { groupRow(body, group); lastGroup = group; }
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td class="key">${esc(base.label)}</td>${tds.join("")}`;
+    body.appendChild(tr);
+  }
+  document.getElementById("stats").textContent =
+    `${PROGS[b]}: ${total} keys · ${sameN} do the same somewhere else · ${diffN} do something else somewhere else`;
+}
+
+// ---- Keyboard heatmap --------------------------------------------------------------------
+
+const KEYS = [];
+function row(y, x, list) {
+  for (const k of list) {
+    const [id, label, w = 1, h = 1] = Array.isArray(k) ? k : [k, k];
+    if (id) KEYS.push({ id, label, x, y, w, h });
+    x += w;
+  }
+}
+row(0, 0, [["Esc", "Esc"]]);
+row(0, 2, ["F1", "F2", "F3", "F4"]);
+row(0, 6.5, ["F5", "F6", "F7", "F8"]);
+row(0, 11, ["F9", "F10", "F11", "F12"]);
+row(1.5, 0, [["Grave", "`"], ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 0].map((d) => ["K" + d, String(d)]), ["Minus", "-"], ["Equal", "="], ["Bksp", "Backspace", 2]]);
+row(2.5, 0, [["Tab", "Tab", 1.5], ..."QWERTYUIOP".split(""), ["LBr", "["], ["RBr", "]"], ["Bksl", "\\", 1.5]]);
+row(3.5, 0, [["Caps", "Caps", 1.75], ..."ASDFGHJKL".split(""), ["Semi", ";"], ["Quote", "'"], ["Enter", "Enter", 2.25]]);
+row(4.5, 0, [["LShift", "Shift", 2.25], ..."ZXCVBNM".split(""), ["Comma", ","], ["Period", "."], ["Slash", "/"], ["RShift", "Shift", 2.75]]);
+row(5.5, 0, [["LCtrl", "Ctrl", 1.25], ["Win", "Win", 1.25], ["LAlt", "Alt", 1.25], ["Space", "Space", 6.25], ["RAlt", "Alt", 1.25], ["Fn", "Fn", 1.25], ["Menu", "Menu", 1.25], ["RCtrl", "Ctrl", 1.25]]);
+row(1.5, 15.5, [["Ins", "Ins"], ["Home", "Home"], ["PgUp", "PgUp"]]);
+row(2.5, 15.5, [["Del", "Del"], ["End", "End"], ["PgDn", "PgDn"]]);
+row(4.5, 16.5, [["Up", "↑"]]);
+row(5.5, 15.5, [["Left", "←"], ["Down", "↓"], ["Right", "→"]]);
+row(1.5, 18.75, [["NLock", "Num"], ["NSlash", "/"], ["NStar", "*"], ["NMinus", "−"]]);
+row(2.5, 18.75, [["N7", "7"], ["N8", "8"], ["N9", "9"], ["NPlus", "+", 1, 2]]);
+row(3.5, 18.75, [["N4", "4"], ["N5", "5"], ["N6", "6"]]);
+row(4.5, 18.75, [["N1", "1"], ["N2", "2"], ["N3", "3"], ["NEnter", "Enter", 1, 2]]);
+row(5.5, 18.75, [["N0", "0", 2], ["NDot", "."]]);
+const KEY_BY_ID = Object.fromEntries(KEYS.map((k) => [k.id, k]));
+
+const LEFT_ZONE = new Set(["Esc", "F1", "F2", "F3", "F4", "Grave", "K1", "K2", "K3", "K4", "K5", "Tab", "Q", "W", "E", "R", "T",
+  "Caps", "A", "S", "D", "F", "G", "LShift", "Z", "X", "C", "V", "B", "LCtrl", "Win", "LAlt", "Space"]);
+const center = (k) => [k.x + k.w / 2, k.y + k.h / 2];
+const HOME = ["A", "S", "D", "F"].map((id) => center(KEY_BY_ID[id]));
+const reach = (id) => {
+  const [x, y] = center(KEY_BY_ID[id]);
+  return Math.min(...HOME.map(([hx, hy]) => Math.hypot(x - hx, y - hy)));
+};
+
+const TOKENS = { ".": "Period", ",": "Comma", "/": "Slash", ";": "Semi", "<": "Comma", ">": "Period", Del: "Del", Delete: "Del",
+  Insert: "Ins", Home: "Home", End: "End", PgUp: "PgUp", PgDn: "PgDn", Up: "Up", Down: "Down", Left: "Left", Right: "Right",
+  Space: "Space", Tab: "Tab", Backspace: "Bksp", Enter: "Enter", Esc: "Esc", "Num .": "NDot", NumPlus: "NPlus", "Num−": "NMinus" };
+const MOD_KEY = { Ctrl: "LCtrl", Shift: "LShift", Alt: "LAlt" };
+
+// "Ctrl+Num 3" -> { mods: ["Ctrl"], key: "N3" }; mouse gestures -> { mouse: true }.
+function parseAtom(label) {
+  let s = label.replace("Num+", "NumPlus").replace(/\s*\[hold\]/, "").replace(/\s+(double-click|drag|click|hold)$/i, "");
+  const mods = [];
+  let m;
+  while ((m = /^(Ctrl|Shift|Alt)\+/.exec(s))) { mods.push(m[1]); s = s.slice(m[0].length); }
+  if (/^(LMB|MMB|RMB|Wheel|drag|click)/i.test(s)) return { mods, mouse: true };
+  let id = TOKENS[s];
+  if (!id && /^[A-Z]$/i.test(s)) id = s.toUpperCase();
+  if (!id && /^[0-9]$/.test(s)) id = "K" + s;
+  if (!id && /^F\d{1,2}$/.test(s)) id = s;
+  if (!id && /^Num \d$/.test(s)) id = "N" + s.slice(4);
+  return { mods, key: id && KEY_BY_ID[id] ? id : null };
+}
+
+const HEAT = PROGS.map((_, p) => {
+  const keys = new Map(), mods = new Map();
+  let mouse = 0, keyN = 0, left = 0, dist = 0;
+  const add = (map, id, what) => {
+    if (!map.has(id)) map.set(id, []);
+    map.get(id).push(what);
+  };
+  for (const [, e] of BIND[p]) {
+    const a = parseAtom(e.label);
+    const what = `${e.label} = ${actNames(e.acts)}`;
+    for (const mod of a.mods) add(mods, MOD_KEY[mod], what);
+    if (a.mouse) { mouse++; continue; }
+    if (!a.key) continue;
+    add(keys, a.key, what);
+    keyN++;
+    if (LEFT_ZONE.has(a.key)) left++;
+    dist += reach(a.key);
+  }
+  return { keys, mods, mouse, keyN, left, avgDist: keyN ? dist / keyN : 0 };
+});
+
+function renderKeyboards() {
+  const max = Math.max(...HEAT.flatMap((h) => [...h.keys.values()].map((v) => v.length)));
+  document.getElementById("summary").innerHTML = HEAT.map((h, p) => {
+    const pct = h.keyN ? Math.round((100 * h.left) / h.keyN) : 0;
+    return `<tr><td>${PROGS[p]}</td><td class="num">${h.keyN}</td><td class="num">${h.left} (${pct}%)</td>
+      <td><div class="meter"><i style="width:${pct}%"></i></div></td><td class="num">${h.avgDist.toFixed(2)} keys</td><td class="num">${h.mouse}</td></tr>`;
+  }).join("");
+
+  document.getElementById("kbCards").innerHTML = HEAT.map((h, p) => {
+    const keys = KEYS.map((k) => {
+      let items = h.keys.get(k.id) || [];
+      if (state.mods && h.mods.has(k.id)) items = items.concat(h.mods.get(k.id).map((w) => "modifier in " + w));
+      const n = items.length;
+      const t = n ? Math.min(1, n / max) : 0;
+      const pct = n ? Math.round(18 + 72 * t) : 0;
+      const style = `left:calc(${k.x} * var(--u));top:calc(${k.y} * var(--u));width:calc(${k.w} * var(--u) - 3px);height:calc(${k.h} * var(--u) - 3px);` +
+        (n ? `background:color-mix(in srgb, var(--heat) ${pct}%, var(--keybg));` : "");
+      const cls = "k" + (n ? " hot" : "") + (pct > 55 ? " strong" : "") + (state.zone && LEFT_ZONE.has(k.id) ? " zone" : "");
+      return `<div class="${cls}" style="${style}"${n ? ` title="${esc(items.join("\n"))}"` : ""}>${esc(k.label)}${n ? `<b>${n}</b>` : ""}</div>`;
+    }).join("");
+    const pct = h.keyN ? Math.round((100 * h.left) / h.keyN) : 0;
+    return `<div class="card"><h2>${PROGS[p]}</h2>
+      <div class="meta">${h.keyN} key bindings, ${pct}% on the left hand, average ${h.avgDist.toFixed(2)} keys from ASDF · ${h.mouse} mouse-only · hover a key for its actions</div>
+      <div class="kbwrap"><div class="kb">${keys}</div></div></div>`;
+  }).join("");
+}
+
+// ---- Wiring ------------------------------------------------------------------------------
+
+function render() {
+  const isKb = state.view === "keyboard";
+  document.querySelectorAll("#viewSeg button").forEach((b) => b.classList.toggle("on", b.dataset.view === state.view));
+  document.getElementById("baseSeg").hidden = state.view !== "key";
+  document.querySelectorAll("#baseSeg button").forEach((b) => b.classList.toggle("on", +b.dataset.base === state.base));
+  document.getElementById("tableView").hidden = isKb;
+  document.getElementById("tableSwitches").hidden = isKb;
+  document.getElementById("tableLegend").hidden = isKb;
+  document.getElementById("keyboardView").hidden = !isKb;
+  document.getElementById("kbSwitches").hidden = !isKb;
+  if (isKb) { renderKeyboards(); return; }
+  renderHead();
+  if (state.view === "action") renderActionView(); else renderKeyView();
+}
+
+document.getElementById("baseSeg").innerHTML = PROGS.map((n, p) => `<button data-base="${p}">Keys of ${n}</button>`).join("");
+
+document.addEventListener("click", (ev) => {
+  const t = ev.target.closest("button");
+  if (!t) return;
+  if (t.dataset.view) state.view = t.dataset.view;
+  else if (t.dataset.go) state.view = t.dataset.go;
+  else if (t.dataset.base !== undefined) { state.base = +t.dataset.base; state.view = "key"; }
+  else return;
+  save();
+  render();
+});
+
+for (const [id, prop] of [["swMatch", "match"], ["swConf", "conf"], ["swHide", "hide"], ["swZone", "zone"], ["swMods", "mods"]]) {
+  const box = document.getElementById(id);
+  box.checked = state[prop];
+  box.addEventListener("change", () => { state[prop] = box.checked; save(); render(); });
+}
+
+render();
+</script>
+</body>
+</html>
