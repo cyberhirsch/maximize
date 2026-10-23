@@ -24,7 +24,11 @@ def top_region():
             return r
     return regions()[0]
 P = {}
-def s0(): ev('ESC','PRESS',10,10); ev('ESC','RELEASE',10,10)
+def s0():
+    # Enabled after startup, so the Max layout for new files (quad view) has not run yet.
+    import maximize.viewport
+    maximize.viewport._apply_layout()
+    ev('ESC','PRESS',10,10); ev('ESC','RELEASE',10,10)
 def s1():
     r = regions()[-1]; P['x'], P['y'] = r.x + r.width*0.5, r.y + r.height*0.5
     say("top region", r.x, r.y, r.width, r.height)
