@@ -6,7 +6,7 @@
 
 import bpy
 from bpy.app.handlers import persistent
-from bpy.props import EnumProperty
+from bpy.props import BoolProperty, EnumProperty
 from bpy.types import Operator
 
 
@@ -249,6 +249,76 @@ def _select_max_tab():
     return None
 
 
+# ------------------------------------------------------------------------------
+# Viewport undo / redo (Shift+Z, Shift+Y): a short history of view changes per viewport.
+
+_HISTORY_SIZE = 50
+_view_history = {}  # region_3d pointer -> {"states": [...], "index": int, "restoring": bool}
+
+
+def _view_state(rv3d):
+    return (tuple(rv3d.view_location), tuple(rv3d.view_rotation), rv3d.view_distance,
+            rv3d.view_perspective, rv3d.is_perspective)
+
+
+def _set_view_state(rv3d, state):
+    location, rotation, distance, perspective, is_perspective = state
+    rv3d.view_location = location
+    rv3d.view_rotation = rotation
+    rv3d.view_distance = distance
+    rv3d.view_perspective = perspective
+    rv3d.is_perspective = is_perspective
+
+
+def _track_views():
+    try:
+        windows = bpy.context.window_manager.windows
+    except AttributeError:
+        return 0.3
+    for window in windows:
+        for area in window.screen.areas:
+            if area.type != 'VIEW_3D':
+                continue
+            for region in area.regions:
+                rv3d = region.data if region.type == 'WINDOW' else None
+                if rv3d is None:
+                    continue
+                state = _view_state(rv3d)
+                entry = _view_history.setdefault(rv3d.as_pointer(), {"states": [state], "index": 0})
+                if entry["states"][entry["index"]] != state:
+                    del entry["states"][entry["index"] + 1:]
+                    entry["states"].append(state)
+                    del entry["states"][:-_HISTORY_SIZE]
+                    entry["index"] = len(entry["states"]) - 1
+    return 0.3
+
+
+class MAXIMIZE_OT_view_history(Operator):
+    """Undo or redo a view change in this viewport (Shift+Z, Shift+Y)"""
+    bl_idname = "maximize.view_history"
+    bl_label = "Undo View Change"
+
+    redo: BoolProperty(name="Redo")
+
+    @classmethod
+    def poll(cls, context):
+        return context.region_data is not None
+
+    def execute(self, context):
+        rv3d = context.region_data
+        _track_views()
+        entry = _view_history.get(rv3d.as_pointer())
+        if entry is None:
+            return {'CANCELLED'}
+        index = entry["index"] + (1 if self.redo else -1)
+        if not 0 <= index < len(entry["states"]):
+            return {'CANCELLED'}
+        entry["index"] = index
+        _set_view_state(rv3d, entry["states"][index])
+        context.area.tag_redraw()
+        return {'FINISHED'}
+
+
 @persistent
 def _load_post(_filepath):
     if not bpy.data.filepath:
@@ -264,6 +334,7 @@ classes = (
     MAXIMIZE_OT_material_editor,
     MAXIMIZE_OT_render_setup,
     MAXIMIZE_OT_angle_snap,
+    MAXIMIZE_OT_view_history,
 )
 
 
@@ -271,9 +342,13 @@ def register():
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.app.handlers.load_post.append(_load_post)
+    bpy.app.timers.register(_track_views, first_interval=1.0, persistent=True)
 
 
 def unregister():
+    if bpy.app.timers.is_registered(_track_views):
+        bpy.app.timers.unregister(_track_views)
+    _view_history.clear()
     if _load_post in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_load_post)
     for cls in reversed(classes):

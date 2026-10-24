@@ -22,7 +22,7 @@ for name in ("Max", "Moritz"):
     print("MXKM", name, kc.name,
           "ctrl-click toggle", ctrl.properties.toggle, "extend", ctrl.properties.extend,
           "| dbl loop", bool(find("Mesh", "mesh.loop_select", 'DOUBLE_CLICK', ctrl=False)),
-          "| ring", bool(find("Mesh", "mesh.loop_select", 'DOUBLE_CLICK', ctrl=True, alt=True)),
+          "| ring", bool(find("Mesh", "mesh.edgering_select", 'DOUBLE_CLICK', ctrl=True, alt=True)),
           "| path", bool(find("Mesh", "mesh.shortest_path_pick", 'CLICK', ctrl=True, shift=True)),
           "| children", bool(find("Object Mode", "object.select_grouped", 'DOUBLE_CLICK')))
 import maximize.preferences as p

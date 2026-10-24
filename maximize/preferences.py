@@ -71,6 +71,11 @@ class MaximizePreferences(bpy.types.AddonPreferences):
         description="New files open with a quad view, centimeters and the Max sidebar tab",
         default=True,
     )
+    use_hover_highlight: BoolProperty(
+        name="Hover Highlight",
+        description="Highlight the object or sub-object under the mouse before you click, as in Max",
+        default=True,
+    )
     first_run_done: BoolProperty(default=False, options={'HIDDEN'})
 
     def draw(self, context):
@@ -81,6 +86,7 @@ class MaximizePreferences(bpy.types.AddonPreferences):
         col = layout.column()
         col.prop(self, "use_max_english")
         col.prop(self, "use_startup_layout")
+        col.prop(self, "use_hover_highlight")
         inputs = context.preferences.inputs
         col.prop(inputs, "use_rotate_around_active", text="Orbit Around Selection")
         col.prop(inputs, "use_zoom_to_mouse", text="Zoom About Mouse Point")

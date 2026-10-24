@@ -21,12 +21,12 @@ Status: ✅ done in `keymap_max.py` · 🟡 partly done · ⬜ to do.
 |---|---|---|---|
 | Viewport navigation (MMB pan, Alt+MMB orbit, Ctrl+Alt+MMB zoom, wheel) | **Max** | The top complaint in the research (15 of 27 sources) | ✅ |
 | Views and zoom extents (T B F L P U C, Z, Ctrl+Alt+Z, Ctrl+Shift+Z, Alt+W, Alt+Q) | **Max** | Daily use | ✅ |
-| Numpad views (Num 1/3/7/5/0/.) | **Blender**, as a bonus | Max doesn't use the numpad, so there's no conflict, and Blender tutorials keep working | ⬜ |
+| Numpad views (Num 1/3/7/5/0/.) | **Blender**, as a bonus | Max doesn't use the numpad, so there's no conflict, and Blender tutorials keep working | ✅ |
 | Display toggles (F3, F4, Alt+X, G, 7, Shift+C/L/G/H) | **Max** | Daily use | ✅ |
 | Selection (click, Ctrl adds, Alt removes, Ctrl+A/D/I, H) | **Max** | Daily use; Shift selecting is the most common surprise for Max users | ✅ |
 | Transform tools Q W E R | **Max = Maya = Unreal** | All three agree | ✅ |
 | Transform dialogs (F12 Type-In, Alt+A Align, Insert Affect Pivot) | **Max** | Daily use | ✅ |
-| Axis constraints while transforming | **Max and Blender** | Add Max's F5/F6/F7 (X/Y/Z) and F8 (plane cycle); keep Blender's X/Y/Z and typed numbers during a drag, which Max users like once they find them | 🟡 F5–F8 to do |
+| Axis constraints while transforming | **Max and Blender** | Add Max's F5/F6/F7 (X/Y/Z) and F8 (plane cycle); keep Blender's X/Y/Z and typed numbers during a drag, which Max users like once they find them | ✅ F5–F8 during transforms |
 | Snaps (S, A, Shift+S, Alt+S) | **Max** | Daily use | 🟡 S and A done |
 | Clone (Ctrl+V, Shift+drag, Shift+drag on gizmo) | **Max** | Daily use | ✅ |
 | Sub-object levels 1–5 and 6/Top | **Max** | Daily use; Blender puts collections here, which Max users never miss | ✅ |
@@ -35,7 +35,7 @@ Status: ✅ done in `keymap_max.py` · 🟡 partly done · ⬜ to do.
 | Quad menu on right-click | **Max** | Signature Max UI | ✅ |
 | Undo / redo, repeat last | **Max** (Ctrl+Z / Ctrl+Y, `;`) with Ctrl+Shift+Z still redoing outside the viewport | Ctrl+Y is the Windows standard too | ✅ |
 | Hold / Fetch (Ctrl+H / Ctrl+Alt+F) | **Max** | Cheap to build: save and reload a temporary file | ⬜ |
-| Undo / redo viewport change (Shift+Z / Shift+Y) | **Max** | Blender has view history only partly; needs a small operator | ⬜ |
+| Undo / redo viewport change (Shift+Z / Shift+Y) | **Max** | Blender has view history only partly; needs a small operator | ✅ |
 | Render (F9, F10, Shift+Q) | **Max** | Daily use | ✅ |
 | Timeline and playback (`/` play, `,` `.` frames, Home/End, K set key, N auto key) | **Max**, plus Space = play | Max has no Space binding in the viewport except the quad-menu lock, so Space can keep Play like Maya, Unreal and Blender | ✅ |
 | Graph Editor, Dope Sheet | **Maya**, plus Max where nothing clashes (K, Ctrl+A/D/I, Ctrl+Alt+Z) | Max's Track View keys are few and rarely used; animators coming from pipelines know Maya, and Industry Compatible is already Maya-like here | ⬜ |
@@ -46,7 +46,7 @@ Status: ✅ done in `keymap_max.py` · 🟡 partly done · ⬜ to do.
 | Geometry Nodes, compositor | **Blender / Industry Compatible** with Unreal-style node wiring | Max Creation Graph has no keys | — keep |
 | Sculpt, weight / vertex / texture paint | **Blender** | Max has almost nothing comparable (Viewport Canvas has 8 keys) | — keep |
 | Grease Pencil, sequencer, text editor, console, file browser | **Blender / OS standard** | No Max equivalent | — keep |
-| Outliner (Scene Explorer) | **Industry Compatible** plus Max's F2 rename | Scene Explorer has few keys | ⬜ F2 |
+| Outliner (Scene Explorer) | **Industry Compatible** plus Max's F2 rename | Scene Explorer has few keys | ✅ |
 | File and window (Ctrl+N/O/S, Ctrl+Shift+S, Ctrl+Alt+S) | **Max = OS standard** | Already identical | ✅ |
 
 ## Contested keys
@@ -94,7 +94,7 @@ Three presets: **Max**, **Moritz** (default) and **Blender**. Moritz keeps Max's
 
 1. **Coverage check script** (`tools/check_max_keymap.py`). Read the Main UI and Edit Poly tables from `shortcuts_max_maya_full.md`, map each Max action to a Blender operator (a small hand-kept mapping table), and report which keys the Max keymap covers, which clash and which have no Moritz feature yet. This turns the plan into a number we can track. ✅ Report: [shortcut_coverage.md](shortcut_coverage.md). First run: 99 of 216 keys OK, 4 conflicts (Ctrl+Shift+A, Shift+I, Shift+S, Up), 33 unbound but the feature exists, 80 with no Moritz feature yet.
 2. **Finish the Max Main UI table** (163 + 25 rows): F5–F8, Shift+Z/Y, Ctrl+H/Ctrl+Alt+F, Alt+N, Shift+B, Alt+Shift+X, Ctrl+Shift+N selection lock, Alt+` show end result, and the rest the script lists. Skip rows for Max-only systems (Asset Tracking, MAXScript, State Sets).
-3. **Restore free Blender keys**: numpad views and the other bindings Max leaves unused, so Blender tutorials work as far as possible.
-4. **Preferences** in Maximize: "Maya navigation", "F frames selection" and "Blender modal keys", each a patch on top of `keymap_max.py`.
-5. **Editors**: Graph Editor and Dope Sheet (Maya + Max), shader editor (Slate + Unreal wiring), Outliner (F2). Later, with their phases: UV editor (Unwrap UVW, Phase 2) and splines (Phase 3).
-6. **Verify**: add a "Moritz" column to the [comparison page](shortcut_comparison.html), so every common Max action shows the Moritz key next to Max's; extend the background test to assert the keys; then a hand test.
+3. **Restore free Blender keys**: numpad views and the other bindings Max leaves unused, so Blender tutorials work as far as possible. ✅ Numpad views; menus and tooltips also show Blender's key (Moritz core).
+4. **Preferences**: "Maya navigation", "F frames selection" and "Blender modal keys", each a patch on top of `keymap_max.py`. ✅ In Preferences > Keymap under the Max and Moritz keymaps (Moritz's presets).
+5. **Editors**: Graph Editor and Dope Sheet (Maya + Max), shader editor (Slate + Unreal wiring), Outliner (F2). ✅ F2, Ctrl+A/D/I, K, Ctrl+Alt+Z, Slate's H and P. Later, with their phases: UV editor (Unwrap UVW, Phase 2) and splines (Phase 3).
+6. **Verify** ✅: add a "Moritz" column to the [comparison page](shortcut_comparison.html), so every common Max action shows the Moritz key next to Max's; extend the background test to assert the keys; then a hand test.

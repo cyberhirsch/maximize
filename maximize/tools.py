@@ -219,7 +219,30 @@ class MAXIMIZE_OT_spacing(Operator):
         return {'FINISHED'}
 
 
+class MAXIMIZE_OT_show_end_result(Operator):
+    """Show End Result (Alt+`): toggle whether the modifier stack shows while editing sub-objects"""
+    bl_idname = "maximize.show_end_result"
+    bl_label = "Show End Result"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj is not None and len(obj.modifiers) > 0
+
+    def execute(self, context):
+        mods = context.active_object.modifiers
+        on = not all(m.show_in_editmode for m in mods)
+        for m in mods:
+            m.show_in_editmode = on
+            if not on:
+                m.show_on_cage = False
+        self.report({'INFO'}, "Show End Result: " + ("On" if on else "Off"))
+        return {'FINISHED'}
+
+
 classes = (
+    MAXIMIZE_OT_show_end_result,
     MAXIMIZE_OT_array,
     MAXIMIZE_OT_spacing,
 )

@@ -5,6 +5,8 @@ A 3ds Max workflow for Blender and Moritz, as one add-on.
 - **Keymaps:** Max (3ds Max 2026 defaults on top of Blender's Industry Compatible keymap) and Moritz (Max keys plus Blender's selection ideas). Both appear in Preferences > Keymap while the add-on is enabled.
 - **Quad menu** on right-click, **Alt+W** maximizes the viewport under the mouse.
 - **Sub-object levels** 1–5 (Vertex, Edge, Border, Polygon, Element), Max-style Ctrl/Alt selection.
+- **Moritz selection:** window by dragging left to right, crossing right to left; hover highlight of objects and sub-objects; Q cycles the region shapes.
+- **Keymap preferences** (Moritz): Maya navigation, F frames selection, Blender modal keys.
 - **Max tools:** Transform Type-In, Align, Array, Spacing Tool, Clone (copy / instance / reference), pivot tools, Select by Name, named selection sets.
 - **Editable primitives** (Box, Sphere, Cylinder, Cone, Tube, Torus, Plane) with live parameters, and a **UVW Map** modifier.
 - **Max English:** interface names such as Weld, Chamfer, Attach and Swift Loop.
@@ -26,7 +28,7 @@ For Moritz the folder is `%APPDATA%\Moritz\5.3\scripts\addons`. Then enable **Ma
 
 - `maximize/` — the add-on
 - `docs/` — shortcut references, the coverage report and the Max / Blender / Maya comparison page
-- `tools/` — `check_max_keymap.py` (coverage report) and `dump_keymaps.py`
+- `tools/` — `check_max_keymap.py` (coverage report), `dump_keymaps.py` and `sync_to_moritz.py` (copies the keymap into Moritz)
 - `tests/` — background and simulated-input UI tests; run each with `moritz.exe` (or `blender`) `--factory-startup [-b | --enable-event-simulate] --python tests/<name>.py`
 
 ## License
