@@ -48,8 +48,11 @@ def _same_event(a, b):
 
 
 class KeymapPatcher:
-    def __init__(self, keyconfig_data):
+    def __init__(self, keyconfig_data, available=None):
         self.items = {name: content["items"] for name, _args, content in keyconfig_data}
+        # `available(idname, props)`: False skips a binding whose operator or menu is missing (Moritz
+        # without the Maximize add-on), so the key keeps its Industry Compatible meaning.
+        self.available = available or (lambda _idname, _props: True)
 
     def strip(self, ev, keymaps):
         for name in keymaps:
@@ -63,11 +66,18 @@ class KeymapPatcher:
 
     def bind(self, keymap, idname, ev, props=None, viewport=False):
         """Bind a key, replacing whatever used it in that keymap (or in the whole viewport)."""
+        if not self.available(idname, props or {}):
+            return
         self.strip(ev, VIEWPORT_KEYMAPS if viewport else (keymap,))
         self.items[keymap].append((idname, ev, {"properties": list(props.items())} if props else None))
 
     def view(self, idname, ev, props=None):
         self.bind("3D View", idname, ev, props, viewport=True)
+
+    def append(self, keymap, idname, ev, props=None):
+        """Add a key without replacing others (an operator that passes the event on)."""
+        if self.available(idname, props or {}):
+            self.items[keymap].append((idname, ev, {"properties": list(props.items())} if props else None))
 
 
 def apply(km, moritz=False):
@@ -142,7 +152,7 @@ def apply(km, moritz=False):
     km.bind(om, "maximize.clone_drag", _event('LEFTMOUSE', 'CLICK_DRAG', shift=True))
     # Shift+drag on a move, rotate or scale gizmo handle: clone first, then the gizmo drags the clones.
     for gizmo_km in ("Generic Gizmo Maybe Drag", "Generic Gizmo Drag"):
-        if gizmo_km in km.items:
+        if gizmo_km in km.items and km.available("maximize.clone_gizmo", {}):
             km.items[gizmo_km][:0] = [
                 ("maximize.clone_gizmo", _event('LEFTMOUSE', 'CLICK_DRAG', shift=True), None),
                 ("gizmogroup.gizmo_tweak", _event('LEFTMOUSE', 'CLICK_DRAG', shift=True), None),
@@ -162,8 +172,7 @@ def apply(km, moritz=False):
     # Border and Element have no Blender select mode: clicks there pick a whole border or element
     # (the operator passes the click through at the other levels).
     for mods, props in (({}, {}), ({"ctrl": True}, {"extend": True}), ({"alt": True}, {"deselect": True})):
-        km.items["Mesh"].append(("maximize.subobject_pick", _event('LEFTMOUSE', 'CLICK', **mods),
-                                 {"properties": list(props.items())} if props else None))
+        km.append("Mesh", "maximize.subobject_pick", _event('LEFTMOUSE', 'CLICK', **mods), props)
 
     # --------------------------------------------------------------------------
     # Edit Poly.
@@ -236,7 +245,51 @@ def _max_tool_selection(km):
                 items[i] = (idname, new_ev, props)
 
 
-def generate_keymaps(industry_compatible, params, moritz=False):
+def _max_keys(km):
+    """Max 2026 keys that the coverage check (`tools/check_max_keymap.py`) found missing or taken."""
+    om, me = "Object Mode", "Mesh"
+    # Conflicts: Max's meaning wins.
+    km.bind(om, "object.select_grouped", _event('A', ctrl=True, shift=True))
+    km.bind(me, "mesh.select_similar", _event('A', ctrl=True, shift=True))
+    km.bind(om, "maximize.spacing", _event('I', shift=True))
+    km.strip(_event('S', shift=True), VIEWPORT_KEYMAPS)
+    km.view("wm.context_toggle", _event('S', shift=True), {"data_path": "space_data.show_object_viewport_curve"})
+    km.strip(_event('UP_ARROW'), VIEWPORT_KEYMAPS)
+    km.view("view3d.walk", _event('UP_ARROW'))
+    # Views, cameras, render.
+    km.view("maximize.camera_from_view", _event('C', shift=True, alt=True))
+    km.view("maximize.camera_from_view", _event('C', ctrl=True, shift=True, alt=True))
+    km.view("view3d.localview", _event('Q', ctrl=True, alt=True))
+    km.view("view3d.zoom", _event('EQUAL', ctrl=True, repeat=True), {"delta": 1})
+    km.view("view3d.zoom", _event('MINUS', ctrl=True, repeat=True), {"delta": -1})
+    km.view("wm.context_cycle_enum", _event('FIVE', shift=True, alt=True),
+            {"data_path": "tool_settings.transform_pivot_point", "wrap": True})
+    km.bind("Screen Editing", "render.render", _event('F9', shift=True), {"use_viewport": True})
+    # Hierarchy selection.
+    km.strip(_event('PAGE_UP'), VIEWPORT_KEYMAPS)
+    km.strip(_event('PAGE_DOWN'), VIEWPORT_KEYMAPS)
+    km.bind(om, "object.select_hierarchy", _event('PAGE_UP'), {"direction": 'PARENT', "extend": False})
+    km.bind(om, "object.select_hierarchy", _event('PAGE_DOWN'), {"direction": 'CHILD', "extend": False})
+    km.bind(om, "object.select_grouped", _event('PAGE_DOWN', shift=True), {"type": 'CHILDREN_RECURSIVE'})
+    # Edit Poly.
+    km.bind(me, "mesh.extrude_context_move", _event('E', shift=True, alt=True))
+    km.bind(me, "mesh.select_more", _event('UP_ARROW', ctrl=True))
+    km.bind(me, "mesh.select_less", _event('DOWN_ARROW', ctrl=True))
+    for keymap in (om, me):
+        km.bind(keymap, "wm.context_toggle", _event('B', shift=True),
+                {"data_path": "tool_settings.use_proportional_edit"})
+    km.bind(me, "maximize.attach_edit", _event('D', shift=True, alt=True))
+    km.bind(me, "mesh.split", _event('R', shift=True))
+    km.bind(me, "maximize.cap", _event('P', alt=True))
+    km.bind(me, "maximize.detach", _event('D', ctrl=True, alt=True))
+    km.bind(me, "maximize.make_planar", _event('M', alt=True))
+    km.bind(me, "mesh.subdivide", _event('M', ctrl=True), {"smoothness": 1.0})
+    km.bind(me, "maximize.quickslice", _event('Q', ctrl=True, shift=True))
+
+
+def generate_keymaps(industry_compatible, params, moritz=False, available=None):
     keyconfig_data = industry_compatible.generate_keymaps(params)
-    apply(KeymapPatcher(keyconfig_data), moritz)
+    km = KeymapPatcher(keyconfig_data, available)
+    apply(km, moritz)
+    _max_keys(km)
     return keyconfig_data

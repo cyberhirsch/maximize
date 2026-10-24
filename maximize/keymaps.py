@@ -4,9 +4,10 @@
 
 """The Max and Moritz keymaps as keyconfig presets.
 
-Blender lists keymaps from preset files, so the add-on writes two small loaders into the user's
-`presets/keyconfig` folder while it is enabled and removes them when it is disabled. The key data
-lives in `keymap_max.py`.
+Moritz ships the Max and Moritz presets itself (with a copy of `keymap_max.py`) and binds the
+add-on's keys only while it is enabled, so the add-on just reloads the active keymap. In Blender,
+which lists keymaps from preset files, the add-on writes two small loaders into the user's
+`presets/keyconfig` folder while it is enabled and removes them when it is disabled.
 """
 
 import importlib
@@ -21,6 +22,12 @@ _LOADER = '''\
 import importlib
 importlib.import_module("{package}.keymaps").load("{name}")
 '''
+
+
+def _built_in():
+    """True in Moritz, whose own Max and Moritz presets come with the program."""
+    system = os.path.join(bpy.utils.system_resource('SCRIPTS'), "presets", "keyconfig")
+    return all(os.path.exists(os.path.join(system, name + ".py")) for name in NAMES)
 
 
 def _preset_dir(create=False):
@@ -50,6 +57,8 @@ def load(name):
 
 
 def write_presets():
+    if _built_in():
+        return
     folder = _preset_dir(create=True)
     for name in NAMES:
         with open(os.path.join(folder, name + ".py"), "w", encoding="utf-8") as fh:
@@ -58,6 +67,8 @@ def write_presets():
 
 def remove_presets():
     folder = _preset_dir()
+    if folder is None or not os.path.isdir(folder):
+        return
     for name in NAMES:
         path = os.path.join(folder, name + ".py")
         if os.path.exists(path):
@@ -91,7 +102,12 @@ def register():
 
 
 def unregister():
-    # Without the add-on its keymaps would call missing operators: fall back to Blender's.
-    if bpy.context.preferences.keymap.active_keyconfig in NAMES:
-        activate("Blender")
+    active = bpy.context.preferences.keymap.active_keyconfig
     remove_presets()
+    if active in NAMES:
+        if _built_in():
+            # Moritz: the same keymap again, now without the add-on's keys.
+            bpy.app.timers.register(_reload_active, first_interval=0.0)
+        else:
+            # Blender: the add-on's keymaps would call missing operators.
+            activate("Blender")

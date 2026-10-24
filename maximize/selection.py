@@ -137,6 +137,24 @@ class MAXIMIZE_OT_subobject_pick(Operator):
         bmesh.update_edit_mesh(mesh, loop_triangles=False, destructive=False)
 
 
+class MAXIMIZE_OT_attach_edit(Operator):
+    """Attach the other selected objects to the object being edited (Alt+Shift+D)"""
+    bl_idname = "maximize.attach_edit"
+    bl_label = "Attach"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'EDIT_MESH' and len(context.selected_objects) > 1
+
+    def execute(self, context):
+        # Joining needs Object Mode; come back to the same sub-object level.
+        bpy.ops.object.mode_set(mode='OBJECT')
+        bpy.ops.object.join()
+        bpy.ops.object.mode_set(mode='EDIT')
+        return {'FINISHED'}
+
+
 class MAXIMIZE_OT_delete_subobject(Operator):
     """Delete the selected sub-objects at the current level (Delete)"""
     bl_idname = "maximize.delete_subobject"
@@ -425,6 +443,7 @@ class MAXIMIZE_MT_selection_sets(bpy.types.Menu):
 classes = (
     MAXIMIZE_OT_subobject,
     MAXIMIZE_OT_subobject_pick,
+    MAXIMIZE_OT_attach_edit,
     MAXIMIZE_OT_delete_subobject,
     MAXIMIZE_OT_chamfer,
     MAXIMIZE_OT_connect,
