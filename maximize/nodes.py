@@ -9,7 +9,7 @@ import math
 import bpy
 
 # Bump when a group's node layout changes, so files get the new version of the group.
-VERSION = 2
+VERSION = 3
 
 
 def modifier_input(mod, name):
@@ -71,7 +71,11 @@ class GroupBuilder:
         node.location = (self._x, 0)
         self._x += 40
         for key, value in props.items():
-            setattr(node, key, value)
+            if hasattr(node, key):
+                setattr(node, key, value)
+            else:
+                # Newer Blender versions turned some node options into menu sockets.
+                node.inputs[key.replace("_", " ").title()].default_value = value.replace("_", " ").title()
         for key, value in (inputs or {}).items():
             self.set(node.inputs[key], value)
         return node

@@ -65,6 +65,8 @@ def _display(context):
             ("op", "object.hide_view_set", "Hide Selection", {"unselected": False}, {}),
             ("op", "object.hide_view_set", "Hide Unselected", {"unselected": True}, {}),
             ("op", "object.hide_view_clear", "Unhide All", {}, {}),
+            ("op", "maximize.freeze", "Freeze Selection", {"freeze": True}, {}),
+            ("op", "maximize.freeze", "Unfreeze All", {"freeze": False}, {}),
             ("op", "maximize.select_by_name", "Select by Name...", {}, {}),
         ]
     return items
@@ -87,6 +89,7 @@ def _viewport(context):
 def _tools_object(_context):
     return [
         ("op", "maximize.convert_poly", "Convert to Editable Poly", {}, {}),
+        ("op", "maximize.edit_poly_add", "Edit Poly Modifier", {}, {}),
         ("op", "maximize.attach", "Attach", {}, {}),
         ("op", "maximize.collapse_all", "Collapse All", {}, {}),
         ("op", "maximize.align", "Align", {}, {}),
@@ -95,6 +98,7 @@ def _tools_object(_context):
         ("op", "maximize.uvw_map", "UVW Map", {}, {}),
         ("menu", "MAXIMIZE_MT_selection_sets", "Named Selection Sets"),
         ("menu", "MAXIMIZE_MT_create", "Create"),
+        ("menu", "MAXIMIZE_MT_create_shapes", "Shapes"),
     ]
 
 

@@ -54,15 +54,41 @@ class MAXIMIZE_OT_subobject(Operator):
     @classmethod
     def poll(cls, context):
         obj = context.active_object
-        return obj is not None and obj.type == 'MESH' and context.mode in {'OBJECT', 'EDIT_MESH'}
+        return obj is not None and (
+            (obj.type == 'MESH' and context.mode in {'OBJECT', 'EDIT_MESH'}) or
+            (obj.type == 'CURVE' and context.mode in {'OBJECT', 'EDIT_CURVE'}))
 
     def execute(self, context):
+        from . import edit_poly
+        if context.active_object.type == 'CURVE':
+            # Editable Spline: Blender's curve Edit Mode has no separate segment or spline level.
+            stored = context.scene.get("maximize_level")
+            leave = context.mode == 'EDIT_CURVE' and (self.level == 'OBJECT' or stored == self.level)
+            bpy.ops.object.mode_set(mode='OBJECT' if leave else 'EDIT')
+            context.scene["maximize_level"] = 'OBJECT' if leave else self.level
+            return {'FINISHED'}
         if self.level == 'OBJECT' or (context.mode == 'EDIT_MESH' and current_level(context) == self.level):
-            bpy.ops.object.mode_set(mode='OBJECT')
+            if not edit_poly.end_edit(context):
+                bpy.ops.object.mode_set(mode='OBJECT')
             context.scene["maximize_level"] = 'OBJECT'
             return {'FINISHED'}
+        mod = edit_poly.active_edit_poly(context.active_object) if context.mode == 'OBJECT' else None
+        if mod is not None:
+            # Edit at the Edit Poly modifier, not the base mesh (Max's stack).
+            edit_poly.begin_edit(context, context.active_object, mod, _SELECT_MODE[self.level])
+            context.scene["maximize_level"] = self.level
+            _redraw_headers(context)
+            return {'FINISHED'}
         if context.mode != 'EDIT_MESH':
-            from .primitives import primitive_modifier
+            from .primitives import is_shape, primitive_modifier
+            if is_shape(context.active_object):
+                # Shapes become editable splines, as in Max.
+                from .shapes import to_editable_spline
+                to_editable_spline(context, context.active_object)
+                self.report({'INFO'}, "Converted to Editable Spline")
+                bpy.ops.object.mode_set(mode='EDIT')
+                context.scene["maximize_level"] = self.level
+                return {'FINISHED'}
             if primitive_modifier(context.active_object) is not None:
                 # Sub-object levels need an editable mesh, as in Max.
                 bpy.ops.object.convert(target='MESH')

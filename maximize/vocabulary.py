@@ -112,8 +112,6 @@ ALIASES = (
     ("attach", "Attach", "object.join", {}, 'OBJECT', "Attach the selected objects to the active one"),
     ("convert_poly", "Convert to Editable Poly", "object.convert", {"target": 'MESH'}, 'OBJECT',
      "Collapse the stack and convert to an editable mesh"),
-    ("collapse_all", "Collapse All", "object.convert", {"target": 'MESH'}, 'OBJECT',
-     "Collapse the whole modifier stack into the mesh"),
     ("make_unique", "Make Unique", "object.make_single_user",
      {"type": 'SELECTED_OBJECTS', "object": True, "obdata": True}, 'OBJECT',
      "Turn instances into independent copies"),

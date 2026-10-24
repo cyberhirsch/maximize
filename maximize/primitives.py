@@ -17,6 +17,7 @@ from mathutils import Matrix, Vector
 from mathutils.geometry import intersect_line_plane
 
 from .nodes import GroupBuilder, draw_modifier_inputs, find_group, modifier_input
+from .shapes import SHAPE_BUILDERS, SHAPE_KINDS, SHAPE_STEPS, SHAPES
 
 MODIFIER_NAME = "Parameters"
 
@@ -28,7 +29,7 @@ KINDS = (
     ('TUBE', "Tube", "", 'MESH_CIRCLE', 4),
     ('TORUS', "Torus", "", 'MESH_TORUS', 5),
     ('PLANE', "Plane", "", 'MESH_PLANE', 6),
-)
+) + SHAPE_KINDS
 
 DIST = 'NodeSocketFloat'
 INT = 'NodeSocketInt'
@@ -156,6 +157,7 @@ _BUILDERS = {
     'TUBE': _build_tube,
     'TORUS': _build_torus,
     'PLANE': _build_plane,
+    **SHAPE_BUILDERS,
 }
 
 
@@ -214,8 +216,9 @@ STEPS = {
     'CONE': ('RADIUS', 'HEIGHT', 'RADIUS2'),
     'TUBE': ('RADIUS', 'RADIUS2', 'HEIGHT'),
     'TORUS': ('RADIUS', 'RADIUS2'),
+    **SHAPE_STEPS,
 }
-_RADIUS_INPUT = {'SPHERE': "Radius", 'CYLINDER': "Radius"}
+_RADIUS_INPUT = {'SPHERE': "Radius", 'CYLINDER': "Radius", 'CIRCLE': "Radius", 'ARC': "Radius", 'NGON': "Radius"}
 _SIZE_INPUTS = ("Width", "Length", "Radius", "Radius 1")
 
 
@@ -318,6 +321,11 @@ class MAXIMIZE_OT_add_primitive(Operator):
         return modifier_input(self._obj.modifiers[MODIFIER_NAME], name)
 
     def _update(self, event):
+        self._apply(event)
+        # Setting modifier inputs from Python doesn't tag the object for re-evaluation.
+        self._obj.update_tag()
+
+    def _apply(self, event):
         step = STEPS[self.kind][self._step]
         if step == 'HEIGHT':
             dy = self._mouse(event)[1] - self._ref_y
@@ -419,17 +427,35 @@ class MAXIMIZE_MT_create(bpy.types.Menu):
     def draw(self, _context):
         layout = self.layout
         for ident, name, _desc, icon, _num in KINDS:
+            if ident not in SHAPES:
+                layout.operator("maximize.add_primitive", text=name, icon=icon).kind = ident
+
+
+class MAXIMIZE_MT_create_shapes(bpy.types.Menu):
+    bl_label = "Shapes"
+    bl_idname = "MAXIMIZE_MT_create_shapes"
+
+    def draw(self, _context):
+        layout = self.layout
+        for ident, name, _desc, icon, _num in SHAPE_KINDS:
             layout.operator("maximize.add_primitive", text=name, icon=icon).kind = ident
+
+
+def is_shape(obj):
+    mod = primitive_modifier(obj)
+    return mod is not None and mod.node_group.get("maximize_kind") in SHAPES
 
 
 def _menu_add(self, _context):
     self.layout.separator()
     self.layout.menu("MAXIMIZE_MT_create", icon='MESH_CUBE')
+    self.layout.menu("MAXIMIZE_MT_create_shapes", icon='CURVE_DATA')
 
 
 classes = (
     MAXIMIZE_OT_add_primitive,
     MAXIMIZE_MT_create,
+    MAXIMIZE_MT_create_shapes,
 )
 
 

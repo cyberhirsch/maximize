@@ -171,6 +171,10 @@ def apply(km, moritz=False, maya_navigation=False):
         km.bind(om, "maximize.subobject", _event(key), {"level": level})
         km.bind("Mesh", "maximize.subobject", _event(key), {"level": level})
     km.bind("Mesh", "maximize.subobject", _event('SIX'), {"level": 'OBJECT'})
+    # Editable Spline: 1 vertex, 2 segment, 3 spline (one Edit Mode in Blender), 6 back to the object.
+    if "Curve" in km.items:
+        for key, level in (('ONE', 'VERTEX'), ('TWO', 'EDGE'), ('THREE', 'BORDER'), ('SIX', 'OBJECT')):
+            km.bind("Curve", "maximize.subobject", _event(key), {"level": level})
     # Border and Element have no Blender select mode: clicks there pick a whole border or element
     # (the operator passes the click through at the other levels).
     for mods, props in (({}, {}), ({"ctrl": True}, {"extend": True}), ({"alt": True}, {"deselect": True})):

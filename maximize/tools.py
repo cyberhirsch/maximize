@@ -219,6 +219,30 @@ class MAXIMIZE_OT_spacing(Operator):
         return {'FINISHED'}
 
 
+class MAXIMIZE_OT_freeze(Operator):
+    """Freeze Selection: frozen objects can't be selected and draw in gray. Unfreeze All releases
+    them (Blender's "Disable Selection", shown in gray in Moritz)"""
+    bl_idname = "maximize.freeze"
+    bl_label = "Freeze"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    freeze: BoolProperty(name="Freeze", default=True)
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'OBJECT'
+
+    def execute(self, context):
+        if self.freeze:
+            for obj in context.selected_objects:
+                obj.hide_select = True
+                obj.select_set(False)
+        else:
+            for obj in context.view_layer.objects:
+                obj.hide_select = False
+        return {'FINISHED'}
+
+
 class MAXIMIZE_OT_show_end_result(Operator):
     """Show End Result (Alt+`): toggle whether the modifier stack shows while editing sub-objects"""
     bl_idname = "maximize.show_end_result"
@@ -242,6 +266,7 @@ class MAXIMIZE_OT_show_end_result(Operator):
 
 
 classes = (
+    MAXIMIZE_OT_freeze,
     MAXIMIZE_OT_show_end_result,
     MAXIMIZE_OT_array,
     MAXIMIZE_OT_spacing,
