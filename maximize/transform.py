@@ -373,11 +373,49 @@ class MAXIMIZE_OT_align(Operator):
 
 CLONE_TYPES = (
     ('COPY', "Copy", "Independent copy"),
-    ('INSTANCE', "Instance", "Shares its mesh with the original: editing the mesh of one edits all. "
-     "Modifiers are copied once; a shared modifier stack is planned for Phase 4"),
-    ('REFERENCE', "Reference", "One-way: shares the original's mesh, but modifiers you add to the reference "
-     "stay on the reference"),
+    ('INSTANCE', "Instance", "Shares the mesh and the modifier stack with the original: editing the mesh or "
+     "the original's modifiers changes all. Modifiers added to an instance stay on it"),
+    ('REFERENCE', "Reference", "Shares the original's mesh and modifier stack; modifiers you add to the "
+     "reference stay on the reference"),
 )
+
+SHARED_GROUP = "MX Shared Stack"
+SHARED_MODIFIER = "Shared Stack"
+
+
+def _shared_group():
+    from .nodes import GroupBuilder, find_group
+    group = find_group(SHARED_GROUP)
+    if group is not None:
+        return group
+    g = GroupBuilder(SHARED_GROUP, "shared_stack")
+    g.input("Geometry", 'NodeSocketGeometry')
+    source = g.input("Original", 'NodeSocketObject')
+    out = g.output()
+    info = g.node('GeometryNodeObjectInfo', {"Object": source}, transform_space='ORIGINAL')
+    g.set(out, info.outputs["Geometry"])
+    return g.tree
+
+
+def shared_stack(obj):
+    """The modifier through which an instance or reference gets its original's stack, or None."""
+    mod = obj.modifiers.get(SHARED_MODIFIER) if obj is not None else None
+    if mod is not None and mod.type == 'NODES' and mod.node_group is not None and             mod.node_group.get("maximize_kind") == "shared_stack":
+        return mod
+    return None
+
+
+def _share_stack(new, original):
+    """Give `new` the original's modifier stack: its own modifiers go, a Shared Stack modifier
+    brings in the original's evaluated mesh (the mesh itself is shared too)."""
+    from .nodes import modifier_input
+    if shared_stack(original) is not None:
+        # Cloning an instance: share the same original.
+        return
+    new.modifiers.clear()
+    mod = new.modifiers.new(SHARED_MODIFIER, 'NODES')
+    mod.node_group = _shared_group()
+    modifier_input(mod, "Original").value = original
 
 
 def _clone(context, objects, clone_type, offset):
@@ -391,8 +429,54 @@ def _clone(context, objects, clone_type, offset):
         for coll in obj.users_collection:
             coll.objects.link(new)
         new.matrix_world = Matrix.Translation(offset) @ obj.matrix_world
+        if linked and obj.type == 'MESH':
+            # Max instances share the modifier stack too, including modifiers added later.
+            _share_stack(new, obj)
         clones.append(new)
     return clones
+
+
+class MAXIMIZE_OT_make_unique(Operator):
+    """Make Unique: turn instances and references into independent copies with their own mesh and
+    their own copy of the modifier stack"""
+    bl_idname = "maximize.make_unique"
+    bl_label = "Make Unique"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'OBJECT' and context.selected_objects
+
+    def execute(self, context):
+        from .nodes import modifier_input
+        targets = list(context.selected_objects)
+        active = context.view_layer.objects.active
+        for obj in targets:
+            if obj.data is not None and obj.data.users > 1:
+                obj.data = obj.data.copy()
+            mod = shared_stack(obj)
+            if mod is None:
+                continue
+            original = modifier_input(mod, "Original").value
+            obj.modifiers.remove(mod)
+            if original is None:
+                continue
+            # Copy the original's modifiers below the object's own ones.
+            for o in context.selected_objects:
+                o.select_set(False)
+            obj.select_set(True)
+            context.view_layer.objects.active = original
+            for index, om in enumerate(original.modifiers):
+                with context.temp_override(object=original, active_object=original, selected_objects=[obj],
+                                           selected_editable_objects=[obj]):
+                    bpy.ops.object.modifier_copy_to_selected(modifier=om.name)
+                copied = obj.modifiers[-1]
+                with context.temp_override(object=obj, active_object=obj):
+                    bpy.ops.object.modifier_move_to_index(modifier=copied.name, index=index)
+        for o in targets:
+            o.select_set(True)
+        context.view_layer.objects.active = active
+        return {'FINISHED'}
 
 
 class MAXIMIZE_OT_clone(Operator):
@@ -566,6 +650,7 @@ class MAXIMIZE_OT_clone_gizmo(Operator):
 
 
 classes = (
+    MAXIMIZE_OT_make_unique,
     MAXIMIZE_OT_transform_typein,
     MAXIMIZE_OT_affect_pivot_only,
     MAXIMIZE_OT_center_pivot,
