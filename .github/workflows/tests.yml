@@ -1,0 +1,50 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  background:
+    # The background tests on stock Blender 5.3 (Linux). Moritz-only tests (keymap preferences,
+    # header hook) and the simulated-input UI tests run locally with moritz.exe.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Blender 5.3
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libxi6 libxxf86vm1 libxfixes3 libxrender1 libgl1 libegl1 libxkbcommon0 libsm6 jq > /dev/null
+          # A 5.3 release if there is one, else the latest 5.3 build from builder.blender.org.
+          url=$(curl -fsSL https://download.blender.org/release/Blender5.3/ 2>/dev/null \
+                | grep -o 'blender-5\.3\.[0-9]*-linux-x64\.tar\.xz' | sort -V | tail -1 || true)
+          if [ -n "$url" ]; then
+            url="https://download.blender.org/release/Blender5.3/$url"
+          else
+            url=$(curl -fsSL 'https://builder.blender.org/download/daily/?format=json&v=1' \
+                  | jq -r '[.[] | select(.version | startswith("5.3")) | select(.platform == "linux")
+                           | select(.architecture == "x86_64") | select(.file_extension == "xz")][0].url')
+          fi
+          echo "Blender: $url"
+          curl -fsSL "$url" -o blender.tar.xz
+          mkdir blender && tar -xf blender.tar.xz -C blender --strip-components=1
+          echo "$PWD/blender" >> "$GITHUB_PATH"
+
+      - name: Run tests
+        run: |
+          set -uo pipefail
+          status=0
+          for t in test_background test_keymaps test_edit_poly test_splines test_phase4; do
+            echo "::group::$t"
+            blender --factory-startup -b --python "tests/$t.py" 2>&1 | tee "$t.log"
+            echo "::endgroup::"
+            if grep -q "FAIL\|Traceback" "$t.log"; then
+              echo "::error::$t failed"
+              status=1
+            fi
+          done
+          exit $status

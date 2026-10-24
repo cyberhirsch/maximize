@@ -277,15 +277,33 @@ classes = (
 )
 
 
+def draw_levels(layout, context):
+    """Moritz's header hook: Max's five sub-object levels instead of Blender's three select modes."""
+    if context.mode != 'EDIT_MESH':
+        return False
+    from .selection import current_level
+    current = current_level(context)
+    row = layout.row(align=True)
+    for level in ('VERTEX', 'EDGE', 'BORDER', 'POLYGON', 'ELEMENT'):
+        op = row.operator("maximize.subobject", text="", depress=(current == level), **level_icon(level))
+        op.level = level
+    return True
+
+
 def register():
     _load_icons()
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.types.VIEW3D_MT_editor_menus.append(_header_menu)
+    # Moritz only: Blender's header has no hook.
+    if hasattr(bpy.types.VIEW3D_HT_header, "select_mode_draw"):
+        bpy.types.VIEW3D_HT_header.select_mode_draw = draw_levels
 
 
 def unregister():
     global _icons
+    if getattr(bpy.types.VIEW3D_HT_header, "select_mode_draw", None) is draw_levels:
+        bpy.types.VIEW3D_HT_header.select_mode_draw = None
     bpy.types.VIEW3D_MT_editor_menus.remove(_header_menu)
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
