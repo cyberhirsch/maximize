@@ -27,7 +27,7 @@ For Moritz the folder is `%APPDATA%\Moritz\5.3\scripts\addons`. Then enable **Ma
 - `maximize/` — the add-on
 - `docs/` — shortcut references, the coverage report and the Max / Blender / Maya comparison page
 - `tools/` — `check_max_keymap.py` (coverage report) and `dump_keymaps.py`
-- `tests/` — background and simulated-input UI tests; run each with `blender --factory-startup [-b | --enable-event-simulate] --python tests/<name>.py`
+- `tests/` — background and simulated-input UI tests; run each with `moritz.exe` (or `blender`) `--factory-startup [-b | --enable-event-simulate] --python tests/<name>.py`
 
 ## License
 
