@@ -437,6 +437,7 @@ class MAXIMIZE_MT_create_shapes(bpy.types.Menu):
 
     def draw(self, _context):
         layout = self.layout
+        layout.operator("maximize.line", icon='IPO_LINEAR')
         for ident, name, _desc, icon, _num in SHAPE_KINDS:
             layout.operator("maximize.add_primitive", text=name, icon=icon).kind = ident
 

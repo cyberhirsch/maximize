@@ -115,3 +115,109 @@ xs = [p.x for p in pts]
 check("boolean union", a.type == 'CURVE' and len(a.data.splines) >= 1 and abs(max(xs) - 1.0) < 1e-3 and
       abs(min(xs) + 0.5) < 1e-3, a.type, len(a.data.splines), len(pts),
       round(min(xs), 3) if xs else None, round(max(xs), 3) if xs else None)
+
+# Break: a closed rectangle split at two corners gives two open splines.
+r3 = primitives._create_object(ctx, 'RECTANGLE', Matrix())
+bpy.ops.maximize.subobject(level='VERTEX')
+r3 = ctx.active_object
+bpy.ops.curve.select_all(action='DESELECT')
+bpy.ops.object.mode_set(mode='OBJECT')
+sp = r3.data.splines[0]
+pts = sp.bezier_points if sp.type == 'BEZIER' else sp.points
+n3 = len(pts)
+for i in (0, 2):
+    if sp.type == 'BEZIER':
+        pts[i].select_control_point = True
+    else:
+        pts[i].select = True
+bpy.ops.object.mode_set(mode='EDIT')
+bpy.ops.maximize.spline_break()
+bpy.ops.object.mode_set(mode='OBJECT')
+splines = r3.data.splines
+check("break", len(splines) == 2 and not any(s.use_cyclic_u for s in splines) and
+      sum(len(s.bezier_points) for s in splines) == n3 + 2, len(splines), [len(s.bezier_points) for s in splines])
+
+# Connect: Blender's Make Segment joins the two ends again.
+bpy.ops.object.mode_set(mode='EDIT')
+bpy.ops.curve.select_all(action='DESELECT')
+bpy.ops.object.mode_set(mode='OBJECT')
+s0, s1 = r3.data.splines
+s0.bezier_points[-1].select_control_point = True
+s1.bezier_points[0].select_control_point = True
+bpy.ops.object.mode_set(mode='EDIT')
+bpy.ops.curve.make_segment()
+bpy.ops.object.mode_set(mode='OBJECT')
+check("connect", len(r3.data.splines) == 1, len(r3.data.splines))
+
+# Line: the spline builder behind the modal tool.
+from maximize.spline_tools import MAXIMIZE_OT_line
+from mathutils import Vector
+
+
+class _FakeLine:
+    _obj = None
+    _points = [(Vector((0, 0, 0)), None), (Vector((1, 0, 0)), Vector((1.5, 0.5, 0))), (Vector((1, 1, 0)), None)]
+
+
+fake = _FakeLine()
+MAXIMIZE_OT_line._rebuild(fake, ctx, fake._points)
+line = fake._obj
+bp = line.data.splines[0].bezier_points
+check("line", line.name.startswith("Line") and len(bp) == 3 and bp[0].handle_left_type == 'VECTOR' and
+      bp[1].handle_left_type == 'ALIGNED' and (bp[1].handle_left - Vector((0.5, -0.5, 0))).length < 1e-5,
+      line.name, len(bp))
+
+# Trim and Extend on straight and curved splines.
+from maximize import spline_tools
+
+
+def poly_curve(name, polylines, cyclic=()):
+    data = bpy.data.curves.new(name, 'CURVE')
+    for k, pts in enumerate(polylines):
+        s = data.splines.new('BEZIER')
+        s.bezier_points.add(len(pts) - 1)
+        for bp, co in zip(s.bezier_points, pts):
+            bp.co = co
+            bp.handle_left_type = bp.handle_right_type = 'VECTOR'
+        s.use_cyclic_u = k in cyclic
+    obj = bpy.data.objects.new(name, data)
+    ctx.collection.objects.link(obj)
+    return obj
+
+
+plus = poly_curve("Plus", [[(-1, 0, 0), (1, 0, 0)], [(0, -1, 0), (0, 1, 0)]])
+ok = spline_tools.trim(plus.data, 0, 0.8)
+xs = sorted(round(p.co.x, 4) for p in plus.data.splines[-1].bezier_points)
+check("trim open", ok and len(plus.data.splines) == 2 and xs == [-1.0, 0.0], xs)
+
+box = poly_curve("Box", [[(-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0)], [(0, -2, 0), (0, 2, 0)]], cyclic=(0,))
+ok = spline_tools.trim(box.data, 0, 0.75)   # bottom edge, right of the line
+s = box.data.splines[-1]
+xs = [round(p.co.x, 4) for p in s.bezier_points]
+check("trim closed", ok and not s.use_cyclic_u and len(s.bezier_points) == 4 and xs[0] == 0 and xs[-1] == 0, xs)
+
+ext = poly_curve("Ext", [[(-1, 2, 0), (-0.5, 2, 0)], [(0, -3, 0), (0, 3, 0)]])
+ok = spline_tools.extend(ext.data, 0, at_end=True)
+end = ext.data.splines[-1].bezier_points[-1].co
+check("extend", ok and (end - Vector((0, 2, 0))).length < 1e-5, tuple(round(c, 4) for c in end))
+
+# A curved spline: trimming a circle keeps its curvature.
+circ = primitives._create_object(ctx, 'CIRCLE', Matrix())
+for o in ctx.selected_objects:
+    o.select_set(False)
+circ.select_set(True)
+ctx.view_layer.objects.active = circ
+bpy.ops.maximize.subobject(level='VERTEX')
+circ = ctx.active_object
+bpy.ops.object.mode_set(mode='OBJECT')
+s = circ.data.splines.new('BEZIER')
+s.bezier_points.add(1)
+for bp, co in zip(s.bezier_points, ((0, -5, 0), (0, 5, 0))):
+    bp.co = co
+    bp.handle_left_type = bp.handle_right_type = 'VECTOR'
+r = max(p.co.length for p in circ.data.splines[0].bezier_points)
+ok = spline_tools.trim(circ.data, 0, 0.5)
+arc = circ.data.splines[-1]
+ev = arc.bezier_points
+check("trim curved", ok and len(circ.data.splines) == 2 and
+      all(abs(p.co.length - r) < 1e-3 for p in ev), [round(p.co.length, 4) for p in ev], round(r, 4))

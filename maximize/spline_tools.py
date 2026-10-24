@@ -14,7 +14,9 @@ import math
 import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty
 from bpy.types import Operator
+from bpy_extras import view3d_utils
 from mathutils import Vector
+from mathutils.geometry import intersect_line_plane
 
 from .nodes import GroupBuilder, find_group, modifier_input
 
@@ -429,6 +431,424 @@ class MAXIMIZE_OT_shape_boolean(Operator):
         return {'FINISHED'}
 
 
+# ------------------------------------------------------------------------------
+# Line tool
+
+
+class MAXIMIZE_OT_line(Operator):
+    """Line: click for corners, drag for curved points; click the first point to close, right-click
+    or Esc to finish. Snaps to the grid while snapping is on"""
+    bl_idname = "maximize.line"
+    bl_label = "Line"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'OBJECT' and context.area is not None and context.area.type == 'VIEW_3D'
+
+    def invoke(self, context, _event):
+        self._obj = None
+        self._points = []      # fixed points: (co, handle or None)
+        self._press = None     # (co, mouse) where the button went down
+        self._drag = None
+        self._region = None
+        context.window_manager.modal_handler_add(self)
+        context.workspace.status_text_set("Line: click for corners, drag for curves, click the first point "
+                                          "to close; right-click or Esc to finish")
+        return {'RUNNING_MODAL'}
+
+    def _region_at(self, context, event):
+        for region in context.area.regions:
+            if (region.type == 'WINDOW' and region.x <= event.mouse_x < region.x + region.width and
+                    region.y <= event.mouse_y < region.y + region.height):
+                return region
+        return None
+
+    def _hit(self, context, mouse):
+        """The point under the mouse on the construction plane, as for the primitives."""
+        from .primitives import _grid_plane
+        region = self._region
+        rv3d = region.data
+        normal = _grid_plane(rv3d)[2]
+        origin = view3d_utils.region_2d_to_origin_3d(region, rv3d, mouse)
+        direction = view3d_utils.region_2d_to_vector_3d(region, rv3d, mouse)
+        hit = intersect_line_plane(origin, origin + direction, Vector(), normal)
+        if hit is not None and context.tool_settings.use_snap:
+            step = context.space_data.overlay.grid_scale_unit or 1.0
+            hit = Vector([round(c / step) * step for c in hit])
+        return hit
+
+    def _screen(self, co):
+        p = view3d_utils.location_3d_to_region_2d(self._region, self._region.data, co)
+        return p if p is not None else Vector((1e9, 1e9))
+
+    def _rebuild(self, context, points):
+        """Write `points` [(co, handle or None)] into the line's one spline."""
+        if self._obj is None:
+            data = bpy.data.curves.new("Line", 'CURVE')
+            data.dimensions = '3D'
+            i = 1
+            while "Line{:03d}".format(i) in bpy.data.objects:
+                i += 1
+            self._obj = bpy.data.objects.new("Line{:03d}".format(i), data)
+            context.collection.objects.link(self._obj)
+            for o in context.selected_objects:
+                o.select_set(False)
+            self._obj.select_set(True)
+            context.view_layer.objects.active = self._obj
+        curve = self._obj.data
+        curve.splines.clear()
+        _write(curve, None, [_Point(co) if handle is None else
+                             _Point(co, co - (handle - co), handle, 'ALIGNED', 'ALIGNED')
+                             for co, handle in points], cyclic=False)
+        return curve.splines[0]
+
+    def _finish(self, context, close=False):
+        context.workspace.status_text_set(None)
+        if len(self._points) < 2:
+            if self._obj is not None:
+                data = self._obj.data
+                bpy.data.objects.remove(self._obj)
+                bpy.data.curves.remove(data)
+            return {'CANCELLED'}
+        self._rebuild(context, self._points).use_cyclic_u = close
+        return {'FINISHED'}
+
+    def modal(self, context, event):
+        if event.type in {'MIDDLEMOUSE', 'WHEELUPMOUSE', 'WHEELDOWNMOUSE'}:
+            return {'PASS_THROUGH'}
+        if event.type in {'RIGHTMOUSE', 'ESC'} and event.value == 'PRESS':
+            return self._finish(context)
+        region = self._region_at(context, event)
+        if region is None:
+            return {'PASS_THROUGH'} if self._press is None else {'RUNNING_MODAL'}
+        self._region = region
+        mouse = Vector((event.mouse_x - region.x, event.mouse_y - region.y))
+        hit = self._hit(context, mouse)
+        if hit is None:
+            return {'RUNNING_MODAL'}
+        if event.type == 'LEFTMOUSE' and event.value == 'PRESS':
+            if len(self._points) >= 2 and (self._screen(self._points[0][0]) - mouse).length < 10:
+                return self._finish(context, close=True)
+            self._press = (hit, mouse)
+            self._drag = None
+        elif event.type == 'LEFTMOUSE' and event.value == 'RELEASE' and self._press is not None:
+            self._points.append((self._press[0], self._drag))
+            self._press = self._drag = None
+            self._rebuild(context, self._points + [(hit, None)])
+        elif event.type == 'MOUSEMOVE':
+            if self._press is not None:
+                if (mouse - self._press[1]).length > 4:
+                    self._drag = hit
+                self._rebuild(context, self._points + [(self._press[0], self._drag)])
+            elif self._points:
+                self._rebuild(context, self._points + [(hit, None)])
+        context.area.tag_redraw()
+        return {'RUNNING_MODAL'}
+
+
+# ------------------------------------------------------------------------------
+# Break
+
+
+def break_spline(curve, spline):
+    """Split `spline` at its selected points; each becomes two ends. Returns True if it split."""
+    points = _read(spline)
+    cuts = [i for i, p in enumerate(points) if p.select]
+    if spline.use_cyclic_u:
+        if not cuts:
+            return False
+        first = cuts[0]
+        points = points[first:] + points[:first + 1]
+        cuts = [0] + [c - first for c in cuts[1:]] + [len(points) - 1]
+    else:
+        cuts = [c for c in cuts if 0 < c < len(points) - 1]
+        if not cuts:
+            return False
+        cuts = [0] + cuts + [len(points) - 1]
+    for a, b in zip(cuts, cuts[1:]):
+        piece = [_Point(p.co, p.left, p.right, p.left_type, p.right_type, p.radius, p.tilt, p.select)
+                 for p in points[a:b + 1]]
+        new = _write(curve, None, piece, cyclic=False)
+        new.resolution_u = spline.resolution_u
+        new.material_index = spline.material_index
+    curve.splines.remove(spline)
+    return True
+
+
+class MAXIMIZE_OT_spline_break(Operator):
+    """Break: split the splines at the selected vertices"""
+    bl_idname = "maximize.spline_break"
+    bl_label = "Break"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'EDIT_CURVE'
+
+    def execute(self, context):
+        def run(objects):
+            return sum(break_spline(obj.data, spline) for obj in objects for spline in list(obj.data.splines))
+
+        if not _with_object_mode(context, run):
+            self.report({'WARNING'}, "Select inner vertices to break at")
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+
+# ------------------------------------------------------------------------------
+# Trim and Extend
+#
+# A spline is parametrized by u = segment index + t. Intersections are found in the object's XY
+# plane on sampled segments, then cut exactly with de Casteljau, so curved segments stay curves.
+
+
+def _segment(points, i):
+    a, b = points[i], points[(i + 1) % len(points)]
+    return a.co, a.right, b.left, b.co
+
+
+def _segment_count(points, cyclic):
+    return len(points) if cyclic else len(points) - 1
+
+
+def _split(c, t):
+    """Split the cubic `c` at t into two cubics."""
+    p0, p1, p2, p3 = c
+    a, b, d = p0.lerp(p1, t), p1.lerp(p2, t), p2.lerp(p3, t)
+    e, f = a.lerp(b, t), b.lerp(d, t)
+    g = e.lerp(f, t)
+    return (p0, a, e, g), (g, f, d, p3)
+
+
+def _straight(c):
+    p0, p1, p2, p3 = c
+    line = p3 - p0
+    if line.length < 1e-9:
+        return True
+    return all((p - p0).cross(line).length / line.length < 1e-6 for p in (p1, p2))
+
+
+def _polyline(points, cyclic):
+    """[(u, co)] samples along the spline."""
+    out = []
+    for i in range(_segment_count(points, cyclic)):
+        c = _segment(points, i)
+        steps = 1 if _straight(c) else 16
+        for k in range(steps):
+            t = k / steps
+            out.append((i + t, _split(c, t)[1][0] if 0 < t else c[0]))
+    end = len(points) if cyclic else len(points) - 1
+    out.append((end, points[0].co if cyclic else points[-1].co))
+    return out
+
+
+def _cross2(a, b):
+    return a.x * b.y - a.y * b.x
+
+
+def _edge_hits(p, q, r, s):
+    """Intersection of segments p-q and r-s in XY: (fraction on pq, fraction on rs) or None."""
+    d1, d2 = (q - p).xy, (s - r).xy
+    den = _cross2(d1, d2)
+    if abs(den) < 1e-12:
+        return None
+    w = (r - p).xy
+    a, b = _cross2(w, d2) / den, _cross2(w, d1) / den
+    if -1e-9 <= a <= 1 + 1e-9 and -1e-9 <= b <= 1 + 1e-9:
+        return a, b
+    return None
+
+
+def _intersections(curve, index):
+    """Parameters u on spline `index` where it crosses any spline of `curve` (itself included)."""
+    splines = [(_read(s), s.use_cyclic_u) for s in curve.splines]
+    points, cyclic = splines[index]
+    mine = _polyline(points, cyclic)
+    found = []
+    for j, (other, other_cyclic) in enumerate(splines):
+        theirs = mine if j == index else _polyline(other, other_cyclic)
+        for k in range(len(mine) - 1):
+            (u0, p), (u1, q) = mine[k], mine[k + 1]
+            for m in range(len(theirs) - 1):
+                if j == index and abs(m - k) <= 1:
+                    continue
+                (_v0, r), (_v1, s) = theirs[m], theirs[m + 1]
+                hit = _edge_hits(p, q, r, s)
+                if hit is not None:
+                    found.append(u0 + (u1 - u0) * hit[0])
+    found.sort()
+    return [u for i, u in enumerate(found) if i == 0 or u - found[i - 1] > 1e-6]
+
+
+def _cut(points, cyclic, u0, u1):
+    """The piece of a spline from u0 to u1 (u1 may wrap past the end of a closed spline)."""
+    n = _segment_count(points, cyclic)
+    if u1 < u0:
+        u1 += n
+    out = []
+    u = u0
+    while u < u1 - 1e-9:
+        i = int(math.floor(u + 1e-9))
+        seg = _segment(points, i % n)
+        end = min(u1, i + 1)
+        t0, t1 = u - i, end - i
+        c = _split(seg, t1)[0] if t1 < 1 - 1e-9 else seg
+        if t0 > 1e-9:
+            c = _split(c, t0 / t1)[1]
+        if not out:
+            out.append(_Point(c[0], c[0], c[1], 'FREE', 'FREE'))
+        else:
+            out[-1].right = c[1]
+        out.append(_Point(c[3], c[2], c[3], 'FREE', 'FREE'))
+        u = end
+    for p, src in ((out[0], u0), (out[-1], u1)):
+        k = round(src) % len(points) if abs(src - round(src)) < 1e-9 else None
+        if k is not None:
+            p.radius, p.tilt = points[k].radius, points[k].tilt
+    return out
+
+
+def trim(curve, index, u):
+    """Max's Trim: remove the piece of spline `index` around u, up to the nearest crossings."""
+    spline = curve.splines[index]
+    points, cyclic = _read(spline), spline.use_cyclic_u
+    n = _segment_count(points, cyclic)
+    cuts = [c for c in _intersections(curve, index) if 1e-6 < c < n - 1e-6 or cyclic]
+    before = [c for c in cuts if c < u]
+    after = [c for c in cuts if c > u]
+    if cyclic:
+        if len(cuts) < 2:
+            return False
+        a = before[-1] if before else cuts[-1]
+        b = after[0] if after else cuts[0]
+        pieces = [(b, a)]
+    else:
+        if not cuts:
+            return False
+        pieces = []
+        if before:
+            pieces.append((0.0, before[-1]))
+        if after:
+            pieces.append((after[0], float(n)))
+    for u0, u1 in pieces:
+        new = _write(curve, None, _cut(points, cyclic, u0, u1), cyclic=False)
+        new.resolution_u = spline.resolution_u
+        new.material_index = spline.material_index
+    curve.splines.remove(spline)
+    return True
+
+
+def extend(curve, index, at_end):
+    """Max's Extend: lengthen the open end of spline `index` straight on to the nearest spline it meets."""
+    spline = curve.splines[index]
+    if spline.use_cyclic_u:
+        return False
+    points = _read(spline)
+    end = points[-1] if at_end else points[0]
+    handle = end.left if at_end else end.right
+    neighbor = points[-2] if at_end else points[1]
+    direction = end.co - (handle if (end.co - handle).length > 1e-9 else neighbor.co)
+    if direction.xy.length < 1e-9:
+        return False
+    # A ray just long enough to cross everything (mathutils works in single precision).
+    polys = [_polyline(_read(s), s.use_cyclic_u) for s in curve.splines]
+    reach = 2.0 * max((co - end.co).length for poly in polys for _u, co in poly) + 1.0
+    far = end.co + direction.normalized() * reach
+    best = None
+    for poly in polys:
+        for m in range(len(poly) - 1):
+            hit = _edge_hits(end.co, far, poly[m][1], poly[m + 1][1])
+            if hit is not None and hit[0] * reach > 1e-5 and (best is None or hit[0] < best):
+                best = hit[0]
+    if best is None:
+        return False
+    target = end.co.lerp(far, best)
+    new = _Point(target)
+    if at_end:
+        end.right = end.co.copy()
+        end.right_type = 'VECTOR'
+        points.append(new)
+    else:
+        end.left = end.co.copy()
+        end.left_type = 'VECTOR'
+        points.insert(0, new)
+    _write(curve, spline, points, cyclic=False)
+    return True
+
+
+class _PickSpline:
+    """Modal base: click near a spline in Editable Spline to act on it; right-click or Esc ends."""
+    bl_options = {'REGISTER', 'UNDO'}
+    status = ""
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'EDIT_CURVE' and context.area is not None and context.area.type == 'VIEW_3D'
+
+    def invoke(self, context, _event):
+        context.window_manager.modal_handler_add(self)
+        context.workspace.status_text_set(self.status)
+        return {'RUNNING_MODAL'}
+
+    def _pick(self, context, event):
+        """(object, spline index, u) of the spline point nearest the mouse, within 15 pixels."""
+        region = next((r for r in context.area.regions if r.type == 'WINDOW' and
+                       r.x <= event.mouse_x < r.x + r.width and r.y <= event.mouse_y < r.y + r.height), None)
+        if region is None:
+            return None
+        mouse = Vector((event.mouse_x - region.x, event.mouse_y - region.y))
+        best = None
+        for obj in _edit_curves(context):
+            for index, s in enumerate(obj.data.splines):
+                poly = _polyline(_read(s), s.use_cyclic_u)
+                for (u0, a), (u1, b) in zip(poly, poly[1:]):
+                    pa = view3d_utils.location_3d_to_region_2d(region, region.data, obj.matrix_world @ a)
+                    pb = view3d_utils.location_3d_to_region_2d(region, region.data, obj.matrix_world @ b)
+                    if pa is None or pb is None:
+                        continue
+                    d = pb - pa
+                    t = 0.0 if d.length < 1e-6 else max(0.0, min(1.0, (mouse - pa).dot(d) / d.length_squared))
+                    dist = (pa + d * t - mouse).length
+                    if dist < 15 and (best is None or dist < best[0]):
+                        best = (dist, obj, index, u0 + (u1 - u0) * t)
+        return best[1:] if best else None
+
+    def modal(self, context, event):
+        if event.type in {'RIGHTMOUSE', 'ESC'} and event.value == 'PRESS':
+            context.workspace.status_text_set(None)
+            return {'FINISHED'}
+        if event.type == 'LEFTMOUSE' and event.value == 'PRESS':
+            hit = self._pick(context, event)
+            if hit is not None:
+                obj, index, u = hit
+                _with_object_mode(context, lambda _objects: self.act(obj.data, index, u))
+                context.area.tag_redraw()
+            return {'RUNNING_MODAL'}
+        return {'PASS_THROUGH'}
+
+
+class MAXIMIZE_OT_spline_trim(_PickSpline, Operator):
+    """Trim: click a piece of spline to remove it up to the nearest crossings"""
+    bl_idname = "maximize.spline_trim"
+    bl_label = "Trim"
+    status = "Trim: click a spline piece to remove it; right-click or Esc to finish"
+
+    def act(self, curve, index, u):
+        return trim(curve, index, u)
+
+
+class MAXIMIZE_OT_spline_extend(_PickSpline, Operator):
+    """Extend: click near an open end to lengthen it to the next spline it meets"""
+    bl_idname = "maximize.spline_extend"
+    bl_label = "Extend"
+    status = "Extend: click near an open end; right-click or Esc to finish"
+
+    def act(self, curve, index, u):
+        n = _segment_count(_read(curve.splines[index]), curve.splines[index].use_cyclic_u)
+        return extend(curve, index, at_end=u > n / 2)
+
+
 class MAXIMIZE_MT_spline_tools(bpy.types.Menu):
     bl_label = "Max Spline Tools"
     bl_idname = "MAXIMIZE_MT_spline_tools"
@@ -439,8 +859,13 @@ class MAXIMIZE_MT_spline_tools(bpy.types.Menu):
             layout.operator("maximize.spline_fillet")
             layout.operator("maximize.spline_chamfer")
             layout.operator("maximize.spline_outline")
+            layout.operator("maximize.spline_break")
+            layout.operator("maximize.spline_trim")
+            layout.operator("maximize.spline_extend")
+            layout.operator("curve.make_segment", text="Connect")
             layout.operator("wm.tool_set_by_id", text="Refine (Pen)").name = "builtin.pen"
         else:
+            layout.operator("maximize.line")
             layout.operator("maximize.loft")
             for ident, name, _desc in OPERATIONS:
                 layout.operator("maximize.shape_boolean", text="Boolean: " + name).operation = ident
@@ -452,6 +877,10 @@ def _menu_curve(self, _context):
 
 
 classes = (
+    MAXIMIZE_OT_line,
+    MAXIMIZE_OT_spline_break,
+    MAXIMIZE_OT_spline_trim,
+    MAXIMIZE_OT_spline_extend,
     MAXIMIZE_OT_spline_fillet,
     MAXIMIZE_OT_spline_chamfer,
     MAXIMIZE_OT_spline_outline,
