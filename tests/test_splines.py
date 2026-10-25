@@ -220,3 +220,33 @@ arc = circ.data.splines[-1]
 ev = arc.bezier_points
 check("trim curved", ok and len(circ.data.splines) == 2 and
       all(abs(p.co.length - r) < 1e-3 for p in ev), [round(p.co.length, 4) for p in ev], round(r, 4))
+
+# Max vertex types, Reset Tangents, Make First (Edit Spline quad menu).
+from maximize.spline_tools import make_first, set_vertex_type
+vt = primitives._create_object(ctx, 'CIRCLE', Matrix())
+primitives.parameter(vt, "Radius").value = 1.0
+bpy.ops.maximize.convert_spline()
+pts = vt.data.splines[0].bezier_points
+for i, bp in enumerate(pts):
+    bp.select_control_point = i == 1
+set_vertex_type(vt.data, 'CORNER')
+check("vertex type corner", pts[1].handle_left_type == 'VECTOR' and pts[0].handle_left_type == 'ALIGNED',
+      pts[1].handle_left_type, pts[0].handle_left_type)
+set_vertex_type(vt.data, 'BEZIER')
+left, right = pts[1].handle_left - pts[1].co, pts[1].handle_right - pts[1].co
+check("vertex type bezier from corner", pts[1].handle_left_type == 'ALIGNED' and left.length > 0.1 and
+      abs(left.normalized().dot(right.normalized()) + 1) < 1e-4, pts[1].handle_left_type, round(left.length, 4))
+old = [tuple(bp.co) for bp in pts]
+for i, bp in enumerate(pts):
+    bp.select_control_point = i == 2
+make_first(vt.data)
+check("make first", [tuple(bp.co) for bp in pts] == old[2:] + old[:2])
+for o in ctx.selected_objects:
+    o.select_set(False)
+vt.select_set(True)
+ctx.view_layer.objects.active = vt
+bpy.ops.object.mode_set(mode='EDIT')
+bpy.ops.curve.select_all(action='SELECT')
+r = bpy.ops.maximize.spline_vertex_type(type='BEZIER_CORNER')
+bpy.ops.object.mode_set(mode='OBJECT')
+check("vertex type operator", r == {'FINISHED'} and all(bp.handle_left_type == 'FREE' for bp in vt.data.splines[0].bezier_points), r)

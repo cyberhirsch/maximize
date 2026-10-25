@@ -849,6 +849,154 @@ class MAXIMIZE_OT_spline_extend(_PickSpline, Operator):
         return extend(curve, index, at_end=u > n / 2)
 
 
+# ------------------------------------------------------------------------------
+# Max vertex types, Reset Tangents, Make First
+
+
+# Max's vertex types as Blender handle types.
+VERTEX_TYPES = (
+    ('CORNER', "Corner", "Sharp vertex, straight handles towards the neighbours (Vector)"),
+    ('SMOOTH', "Smooth", "Smooth curve through the vertex, handles set automatically (Auto)"),
+    ('BEZIER', "Bezier", "Smooth vertex with editable, locked-together handles (Aligned)"),
+    ('BEZIER_CORNER', "Bezier Corner", "Vertex with two independent handles (Free)"),
+)
+_BLENDER_TYPE = {'CORNER': 'VECTOR', 'SMOOTH': 'AUTO', 'BEZIER': 'ALIGNED', 'BEZIER_CORNER': 'FREE'}
+
+
+def _selected_points(curve):
+    for spline in curve.splines:
+        if spline.type == 'BEZIER':
+            for bp in spline.bezier_points:
+                if bp.select_control_point:
+                    yield bp
+
+
+def set_vertex_type(curve, vertex_type, only_selected=True):
+    """Give the (selected) vertices a Max vertex type. As in Max, a Corner vertex that becomes
+    Bezier or Bezier Corner first gets smooth handles."""
+    target = _BLENDER_TYPE[vertex_type]
+    points = _selected_points(curve) if only_selected else (
+        bp for s in curve.splines if s.type == 'BEZIER' for bp in s.bezier_points)
+    count = 0
+    for bp in points:
+        if target in {'ALIGNED', 'FREE'} and 'VECTOR' in {bp.handle_left_type, bp.handle_right_type}:
+            bp.handle_left_type = bp.handle_right_type = 'AUTO'
+        bp.handle_left_type = bp.handle_right_type = target
+        count += 1
+    return count
+
+
+def reset_tangents(curve):
+    """Max's Reset Tangents: smooth handles again, keeping each vertex's type."""
+    count = 0
+    for bp in _selected_points(curve):
+        left, right = bp.handle_left_type, bp.handle_right_type
+        bp.handle_left_type = bp.handle_right_type = 'AUTO'
+        bp.handle_left_type, bp.handle_right_type = left, right
+        count += 1
+    return count
+
+
+_POINT_ATTRS = ("co", "handle_left", "handle_right", "handle_left_type", "handle_right_type",
+                "radius", "tilt", "weight_softbody", "select_control_point", "select_left_handle",
+                "select_right_handle", "hide")
+
+
+def make_first(curve):
+    """Max's Make First: the selected vertex of each closed spline becomes its first vertex."""
+    count = 0
+    for spline in curve.splines:
+        if spline.type != 'BEZIER' or not spline.use_cyclic_u:
+            continue
+        points = spline.bezier_points
+        first = next((i for i, bp in enumerate(points) if bp.select_control_point), 0)
+        if first == 0:
+            continue
+        data = [{a: (getattr(bp, a).copy() if hasattr(getattr(bp, a), "copy") else getattr(bp, a))
+                 for a in _POINT_ATTRS} for bp in points]
+        data = data[first:] + data[:first]
+        for bp, values in zip(points, data):
+            # Free handles first, so setting positions doesn't recompute them.
+            bp.handle_left_type = bp.handle_right_type = 'FREE'
+            for attr in _POINT_ATTRS:
+                if attr not in {"handle_left_type", "handle_right_type"}:
+                    setattr(bp, attr, values[attr])
+        for bp, values in zip(points, data):
+            bp.handle_left_type = values["handle_left_type"]
+            bp.handle_right_type = values["handle_right_type"]
+        count += 1
+    return count
+
+
+class _CurveDataOperator:
+    """Edits the curve data of the active curve; in Edit Mode it round-trips through Object Mode
+    so the edit-mode selection is used and the result shows."""
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj is not None and obj.type == 'CURVE' and context.mode in {'EDIT_CURVE', 'OBJECT'}
+
+    def execute(self, context):
+        edit = context.mode == 'EDIT_CURVE'
+        if edit:
+            bpy.ops.object.mode_set(mode='OBJECT')
+        count = self.apply(context.active_object.data, only_selected=edit)
+        if edit:
+            bpy.ops.object.mode_set(mode='EDIT')
+        if not count:
+            self.report({'WARNING'}, "Nothing to change: select Bezier vertices")
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+
+class MAXIMIZE_OT_spline_vertex_type(_CurveDataOperator, Operator):
+    """Set the Max vertex type of the selected vertices (all vertices in Object Mode)"""
+    bl_idname = "maximize.spline_vertex_type"
+    bl_label = "Vertex Type"
+
+    type: EnumProperty(name="Type", items=VERTEX_TYPES, default='BEZIER')
+
+    def apply(self, curve, only_selected):
+        return set_vertex_type(curve, self.type, only_selected)
+
+
+class MAXIMIZE_OT_spline_reset_tangents(_CurveDataOperator, Operator):
+    """Reset the handles of the selected vertices to smooth, keeping their vertex type"""
+    bl_idname = "maximize.spline_reset_tangents"
+    bl_label = "Reset Tangents"
+
+    @classmethod
+    def poll(cls, context):
+        return super().poll(context) and context.mode == 'EDIT_CURVE'
+
+    def apply(self, curve, only_selected):
+        return reset_tangents(curve)
+
+
+class MAXIMIZE_OT_spline_make_first(_CurveDataOperator, Operator):
+    """Make the selected vertex the first vertex of its closed spline"""
+    bl_idname = "maximize.spline_make_first"
+    bl_label = "Make First"
+
+    @classmethod
+    def poll(cls, context):
+        return super().poll(context) and context.mode == 'EDIT_CURVE'
+
+    def apply(self, curve, only_selected):
+        return make_first(curve)
+
+
+class MAXIMIZE_MT_spline_vertex_type(bpy.types.Menu):
+    bl_label = "Vertex Type"
+    bl_idname = "MAXIMIZE_MT_spline_vertex_type"
+
+    def draw(self, _context):
+        for ident, name, _desc in VERTEX_TYPES:
+            self.layout.operator("maximize.spline_vertex_type", text=name).type = ident
+
+
 class MAXIMIZE_MT_spline_tools(bpy.types.Menu):
     bl_label = "Max Spline Tools"
     bl_idname = "MAXIMIZE_MT_spline_tools"
@@ -856,6 +1004,11 @@ class MAXIMIZE_MT_spline_tools(bpy.types.Menu):
     def draw(self, context):
         layout = self.layout
         if context.mode == 'EDIT_CURVE':
+            layout.menu("MAXIMIZE_MT_spline_vertex_type")
+            layout.operator("maximize.spline_reset_tangents")
+            layout.operator("maximize.spline_make_first")
+            layout.operator("curve.switch_direction", text="Reverse")
+            layout.separator()
             layout.operator("maximize.spline_fillet")
             layout.operator("maximize.spline_chamfer")
             layout.operator("maximize.spline_outline")
@@ -886,6 +1039,10 @@ classes = (
     MAXIMIZE_OT_spline_outline,
     MAXIMIZE_OT_loft,
     MAXIMIZE_OT_shape_boolean,
+    MAXIMIZE_OT_spline_vertex_type,
+    MAXIMIZE_OT_spline_reset_tangents,
+    MAXIMIZE_OT_spline_make_first,
+    MAXIMIZE_MT_spline_vertex_type,
     MAXIMIZE_MT_spline_tools,
 )
 

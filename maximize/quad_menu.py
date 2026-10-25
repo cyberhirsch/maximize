@@ -125,6 +125,26 @@ def _tools_poly(_context):
     ]
 
 
+def _tools_spline(_context):
+    """Max's Editable Spline quad: vertex types first, as in Max's tools1 quadrant."""
+    types = [("maximize.spline_vertex_type", label, {"type": ident})
+             for ident, label in (('CORNER', "Corner"), ('SMOOTH', "Smooth"))]
+    beziers = [("maximize.spline_vertex_type", label, {"type": ident})
+               for ident, label in (('BEZIER', "Bezier"), ('BEZIER_CORNER', "Bez Corner"))]
+    return [
+        ("ops", types),
+        ("ops", beziers),
+        ("op", "maximize.spline_reset_tangents", "Reset Tangents", {}, {}),
+        ("op", "maximize.spline_make_first", "Make First", {}, {}),
+        ("op", "curve.switch_direction", "Reverse", {}, {}),
+        ("op", "maximize.spline_fillet", "Fillet", {}, {}),
+        ("op", "maximize.spline_chamfer", "Chamfer", {}, {}),
+        ("op", "maximize.spline_outline", "Outline", {}, {}),
+        ("op", "maximize.spline_break", "Break", {}, {}),
+        ("op", "curve.make_segment", "Connect", {}, {}),
+    ]
+
+
 def _draw_entries(col, entries):
     for entry in entries:
         kind = entry[0]
@@ -170,6 +190,8 @@ class MAXIMIZE_PT_quad(Panel):
         display, viewport = _display(context), _viewport(context)
         if context.mode == 'EDIT_MESH':
             tools_title, tools = "Edit Poly", _tools_poly(context)
+        elif context.mode == 'EDIT_CURVE':
+            tools_title, tools = "Edit Spline", _tools_spline(context)
         else:
             tools_title, tools = "Tools", _tools_object(context)
         transform = _transform(context)
