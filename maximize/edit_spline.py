@@ -28,9 +28,11 @@ every Editable Spline tool. Leaving the level returns to the object.
 *Files:* a Geometry Nodes modifier plus two helper objects; stock Blender evaluates them as they are.
 
 **Native (Moritz builds with the `EDIT_SPLINE` modifier):** the edit lives in the modifier itself
-(see the Moritz source `MOD_edit_spline.cc`), with no helper objects. Editing still uses a
-stand-in object for the time of the edit; leaving stores the result with `modifier.store()`,
-mapping knots through the tilt as above. Stock Blender keeps the modifier, disabled.
+(see the Moritz source `MOD_edit_spline.cc`), with no helper objects. Builds with
+`session_begin` edit on the object itself: Edit Mode shows the modifier's result and writes back
+into it. Older native builds use a stand-in object for the time of the edit and store with
+`modifier.store()`, mapping knots through the tilt as above. Stock Blender keeps the modifier,
+disabled.
 """
 
 import bpy
@@ -345,7 +347,44 @@ def _end_native(obj, mod, edited_ob, input_name):
     bpy.data.hair_curves.remove(edited)
 
 
+def _session_curves(context, obj, mod):
+    """The modifier's input and its current result, the result's knots mapped to input knots
+    (`mx_orig`; by nearest position after a knot count change below)."""
+    input_curves = _evaluated_curves(context, obj, mod, False)
+    output = _evaluated_curves(context, obj, mod, True)
+    changed = output.attributes.get(CHANGED)
+    if changed is not None and len(changed.data) and changed.data[0].value:
+        from mathutils.kdtree import KDTree
+        points = [d.vector for d in input_curves.attributes["position"].data]
+        tree = KDTree(len(points))
+        for i, co in enumerate(points):
+            tree.insert(co, i)
+        tree.balance()
+        orig = output.attributes.get("mx_orig") or output.attributes.new("mx_orig", 'INT', 'POINT')
+        orig.data.foreach_set("value", [tree.find(d.vector)[1] if points else -1
+                                        for d in output.attributes["position"].data])
+    return input_curves, output
+
+
 def begin_edit(context, obj, mod, level):
+    if is_native(mod) and hasattr(mod, "session_begin"):
+        # Edit on the object itself: Edit Mode shows the modifier's result.
+        input_curves, output = _session_curves(context, obj, mod)
+        try:
+            ok = mod.session_begin(input=input_curves, edited=output)
+        finally:
+            bpy.data.hair_curves.remove(input_curves)
+            bpy.data.hair_curves.remove(output)
+        if not ok:
+            return False
+        for o in context.selected_objects:
+            o.select_set(False)
+        obj.select_set(True)
+        context.view_layer.objects.active = obj
+        context.scene[SESSION] = {"object": obj.name, "modifier": mod.name, "native": True}
+        bpy.ops.object.mode_set(mode='EDIT')
+        context.scene["maximize_level"] = level
+        return True
     if is_native(mod):
         edited_ob, input_name = _begin_native(context, obj, mod)
     else:
@@ -374,6 +413,13 @@ def end_edit(context):
         return False
     del scene[SESSION]
     obj = bpy.data.objects.get(session["object"])
+    if session.get("native"):
+        # Leaving Edit Mode writes the edit into the modifier and ends the session.
+        if obj is not None and obj.mode == 'EDIT':
+            with context.temp_override(active_object=obj, object=obj):
+                bpy.ops.object.mode_set(mode='OBJECT')
+        scene["maximize_level"] = 'OBJECT'
+        return True
     edited_ob = bpy.data.objects.get(session["edited"])
     if edited_ob is not None:
         if edited_ob.mode == 'EDIT' and context.view_layer.objects.active == edited_ob:
@@ -405,7 +451,7 @@ def _depsgraph_post(scene, _depsgraph):
     session = _session(scene)
     if not session:
         return
-    edited_ob = bpy.data.objects.get(session["edited"])
+    edited_ob = bpy.data.objects.get(session["object" if session.get("native") else "edited"])
     if edited_ob is None or edited_ob.mode != 'EDIT':
         bpy.app.timers.register(lambda: end_edit(bpy.context) and None, first_interval=0.0)
 
@@ -443,7 +489,7 @@ def topology_changed(context, obj):
 def draw(layout, context, obj):
     session = _session(context.scene)
     if session:
-        layout.label(text="Editing Edit Spline of " + session["object"], icon='EDITMODE_HLT')
+        layout.label(text="Editing the Edit Spline modifier of " + session["object"], icon='EDITMODE_HLT')
         layout.operator("maximize.edit_spline_end", icon='LOOP_BACK')
         return
     mod = active_edit_spline(obj)

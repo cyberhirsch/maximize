@@ -43,14 +43,15 @@ check("passthrough", len(before) == 4 and abs(before[0].x - 1.0) < 1e-6, [tuple(
 # Edit: level 1 swaps in the Edited stand-in; move the first knot up by 0.5.
 bpy.ops.maximize.subobject(level='VERTEX')
 edited = ctx.active_object
-check("session", edited.get(edit_spline.TAG) and ctx.mode == 'EDIT_CURVE' and rect.hide_get(), edited.name, ctx.mode)
-bpy.ops.object.mode_set(mode='OBJECT')
+# Native builds with sessions edit on the shape itself; others on a stand-in.
+on_shape = edited is rect
+check("session", ctx.mode == 'EDIT_CURVE' and (on_shape or (edited.get(edit_spline.TAG) and rect.hide_get())),
+      edited.name, ctx.mode)
 bp = edited.data.splines[0].bezier_points[0]
 bp.handle_left_type = bp.handle_right_type = 'FREE'
 bp.co.z += 0.5
 bp.handle_left.z += 0.5
 bp.handle_right.z += 0.5
-bpy.ops.object.mode_set(mode='EDIT')
 bpy.ops.maximize.subobject(level='OBJECT')
 check("session end", ctx.active_object == rect and ctx.mode == 'OBJECT' and not rect.hide_get(), ctx.active_object.name)
 after = knots(rect)
