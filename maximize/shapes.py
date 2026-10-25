@@ -19,7 +19,7 @@ import math
 import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty
 from bpy.types import PropertyGroup
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 SHAPE_KINDS = (
     ('RECTANGLE', "Rectangle", "", 'MESH_PLANE', 20),
@@ -30,6 +30,7 @@ SHAPE_KINDS = (
     ('STAR', "Star", "", 'SOLO_OFF', 25),
     ('HELIX', "Helix", "", 'FORCE_VORTEX', 26),
     ('DONUT', "Donut", "", 'MESH_TORUS', 27),
+    ('EGG', "Egg", "", 'MESH_UVSPHERE', 28),
 )
 SHAPES = {kind[0] for kind in SHAPE_KINDS}
 
@@ -42,6 +43,7 @@ SHAPE_STEPS = {
     'STAR': ('RADIUS', 'RADIUS2'),
     'HELIX': ('RADIUS', 'HEIGHT', 'RADIUS2'),
     'DONUT': ('RADIUS', 'RADIUS2'),
+    'EGG': ('RADIUS',),
 }
 
 # Max's handle length for a quarter circle, per unit radius. Fillets use it too, per unit of
@@ -169,6 +171,42 @@ def _star(r1, r2, n, distortion, fillet1, fillet2):
     return (True, knots)
 
 
+def _arc(center, radius, start, sweep, segments):
+    return [(co + center, left + center, right + center, t)
+            for co, left, right, t in _ellipse_arc(radius, radius, start, sweep, segments)]
+
+
+def _egg_spline(half_width, offset, angle):
+    """Max's egg: circular arcs, measured in Max 2026 (in units of half the width w): the bottom a
+    half circle of radius w around (0, -0.3w), the sides arcs of radius 3w around (-+2w, -0.3w)
+    up to 36.87 degrees, the top an arc of radius w/2 around (0, 1.2w). The outline is the same arcs
+    `offset` further out. Max's knots: bottom 2, each side 3, top 3; `angle` turns the egg."""
+    s = half_width
+    rise = math.atan2(1.8, 2.4)
+    arcs = (
+        (Vector((0, -0.3 * s, 0)), s + offset, math.pi, math.pi, 2),
+        (Vector((-2 * s, -0.3 * s, 0)), 3 * s + offset, 0.0, rise, 3),
+        (Vector((0, 1.2 * s, 0)), 0.5 * s + offset, rise, math.pi - 2 * rise, 3),
+        (Vector((2 * s, -0.3 * s, 0)), 3 * s + offset, math.pi - rise, rise, 3),
+    )
+    knots = []
+    for center, radius, start, sweep, segments in arcs:
+        arc = _arc(center, radius, start, sweep, segments)
+        if knots:
+            # The joint takes its left handle from the arc before it.
+            co, left, _right, t = knots.pop()
+            arc[0] = (arc[0][0], left, arc[0][2], t)
+        knots += arc
+    # The last arc ends on the first knot: its left handle goes there.
+    co, left, _right, _t = knots.pop()
+    first = knots[0]
+    knots[0] = (first[0], left, first[2], first[3])
+    if angle:
+        rot = Matrix.Rotation(angle, 3, 'Z')
+        knots = [(rot @ co, rot @ left, rot @ right, t) for co, left, right, t in knots]
+    return (True, knots)
+
+
 def _helix(r1, r2, height, turns, bias, clockwise):
     """Max's helix: 40 corner vertices per turn, the radius linear along it; Bias packs the turns
     towards the top (> 0) or the bottom (< 0)."""
@@ -235,6 +273,11 @@ def build_splines(p):
             centre = Vector()
             knots.append((centre, centre.copy(), centre.copy(), 'FREE'))
         return [(p.pie, knots)]
+    if kind == 'EGG':
+        splines = [_egg_spline(p.width / 2.0, 0.0, p.egg_angle)]
+        if p.outline:
+            splines.append(_egg_spline(p.width / 2.0, p.egg_thickness, p.egg_angle))
+        return splines
     if kind == 'HELIX':
         return [_helix(p.radius1, p.radius2, p.height, p.turns, p.bias, p.direction == 'CW')]
     return []
@@ -314,6 +357,14 @@ class MaximizeShape(PropertyGroup):
                        description="Points drawn between two vertices")
     optimize: BoolProperty(name="Optimize", default=True, update=_update,
                            description="Straight segments get no Steps points")
+    # Egg: Max ties the length to the width (length = 1.5 width).
+    egg_length: FloatProperty(name="Length", min=0.0, unit='LENGTH', update=_update,
+                              get=lambda self: self.width * 1.5,
+                              set=lambda self, value: setattr(self, "width", value / 1.5))
+    egg_thickness: _length("Thickness", 0.05, "Distance of the egg's outline")
+    egg_angle: _angle("Angle", 0.0)
+    outline: BoolProperty(name="Outline", default=True, update=_update,
+                          description="A second egg around the first")
     # Rendering (spline_render.py); kept after Convert to Editable Spline.
     render_renderer: BoolProperty(name="Enable In Renderer", update=_update,
                                   description="Render the spline as a mesh with the cross section below")
@@ -349,6 +400,8 @@ PARAMETERS = {
     'HELIX': (("Radius 1", "radius1"), ("Radius 2", "radius2"), ("Height", "height"), ("Turns", "turns"),
               ("Bias", "bias"), ("Direction", "direction")),
     'DONUT': (("Radius 1", "radius1"), ("Radius 2", "radius2")),
+    'EGG': (("Length", "egg_length"), ("Width", "width"), ("Thickness", "egg_thickness"),
+            ("Angle", "egg_angle"), ("Outline", "outline")),
 }
 COMMON = (("Steps", "steps"), ("Optimize", "optimize"), ("Enable In Renderer", "render_renderer"),
           ("Enable In Viewport", "render_viewport"), ("Thickness", "thickness"),
@@ -358,6 +411,7 @@ DEFAULTS = {
     'ELLIPSE': {"width": 0.6},
     'DONUT': {"radius2": 0.35},
     'HELIX': {"radius2": 0.5},
+    'EGG': {"width": 0.4},
 }
 
 

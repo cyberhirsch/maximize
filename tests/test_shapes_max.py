@@ -43,6 +43,8 @@ CASES = {
     'arc_r10_0_90': ('ARC', {"radius": 10, "angle_from": 0, "angle_to": rad(90)}),
     'arc_r10_0_270_pie': ('ARC', {"radius": 10, "angle_from": 0, "angle_to": rad(270), "pie": True}),
     'donut_10_5': ('DONUT', {"radius1": 10, "radius2": 5}),
+    'egg_w15': ('EGG', {"width": 15, "outline": False}),
+    'egg_w15_outline5': ('EGG', {"width": 15, "outline": True, "egg_thickness": 5}),
     'helix_10_5_20_3': ('HELIX', {"radius1": 10, "radius2": 5, "height": 20, "turns": 3, "direction": 'CW'}),
     'helix_bias': ('HELIX', {"radius1": 10, "radius2": 10, "height": 20, "turns": 2, "bias": 0.5,
                              "direction": 'CCW'}),

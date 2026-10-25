@@ -229,7 +229,8 @@ STEPS = {
     'TORUS': ('RADIUS', 'RADIUS2'),
     **SHAPE_STEPS,
 }
-_RADIUS_INPUT = {'SPHERE': "Radius", 'CYLINDER': "Radius", 'CIRCLE': "Radius", 'ARC': "Radius", 'NGON': "Radius"}
+_RADIUS_INPUT = {'SPHERE': "Radius", 'CYLINDER': "Radius", 'CIRCLE': "Radius", 'ARC': "Radius", 'NGON': "Radius",
+                 'EGG': "Width"}
 _SIZE_INPUTS = ("Width", "Length", "Radius", "Radius 1")
 
 
