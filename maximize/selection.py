@@ -63,6 +63,20 @@ class MAXIMIZE_OT_subobject(Operator):
         if context.active_object.type == 'CURVE':
             # Editable Spline: one Blender Edit Mode; 2 (Segment) and 3 (Spline) change what a
             # click picks (spline_tools.MAXIMIZE_OT_spline_pick).
+            from . import edit_spline
+            if edit_spline.editing_object(context) is not None:
+                # In an Edit Spline session: the current level's key, or 6, returns to the object.
+                stored = context.scene.get("maximize_level")
+                if self.level == 'OBJECT' or stored == self.level:
+                    edit_spline.end_edit(context)
+                else:
+                    context.scene["maximize_level"] = self.level
+                return {'FINISHED'}
+            mod = edit_spline.active_edit_spline(context.active_object) if context.mode == 'OBJECT' else None
+            if mod is not None and self.level != 'OBJECT':
+                # Edit at the Edit Spline modifier: the shape below stays parametric (Max's stack).
+                edit_spline.begin_edit(context, context.active_object, mod, self.level)
+                return {'FINISHED'}
             from .primitives import is_shape
             if self.level != 'OBJECT' and is_shape(context.active_object):
                 from .shapes import to_editable_spline

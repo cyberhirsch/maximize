@@ -215,6 +215,11 @@ def draw_modify(layout, context):
         if primitives.is_shape(obj):
             layout.operator("maximize.convert_spline", text="Convert to Editable Spline")
         layout.operator("maximize.convert_poly", text="Convert to Editable Poly")
+    if obj.type == 'CURVE':
+        from . import edit_spline
+        box = layout.box()
+        box.label(text="Edit Spline")
+        edit_spline.draw(box, context, obj)
     if obj.type == 'CURVE' and not primitives.is_shape(obj):
         _draw_editable_spline(layout, context, obj)
     mod = uvw_map.uvw_modifier(obj)

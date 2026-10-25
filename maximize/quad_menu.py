@@ -86,10 +86,15 @@ def _viewport(context):
     ]
 
 
-def _tools_object(_context):
-    return [
+def _tools_object(context):
+    obj = context.active_object
+    if obj is not None and obj.type == 'CURVE':
+        first = [("op", "maximize.convert_spline", "Convert to Editable Spline", {}, {}),
+                 ("op", "maximize.edit_spline_add", "Edit Spline Modifier", {}, {})]
+    else:
+        first = [("op", "maximize.edit_poly_add", "Edit Poly Modifier", {}, {})]
+    return first + [
         ("op", "maximize.convert_poly", "Convert to Editable Poly", {}, {}),
-        ("op", "maximize.edit_poly_add", "Edit Poly Modifier", {}, {}),
         ("op", "maximize.attach", "Attach", {}, {}),
         ("op", "maximize.collapse_all", "Collapse All", {}, {}),
         ("op", "maximize.align", "Align", {}, {}),

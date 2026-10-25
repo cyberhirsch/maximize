@@ -491,6 +491,46 @@ def _attr(curves, name, default):
     return lambda i: getattr(data[i], key)
 
 
+def curve_from_geometry(curves, name):
+    """Legacy curve data (Blender's editable spline) from evaluated curves geometry: Bezier
+    splines keep their handles, poly curves become Bezier splines with vector handles."""
+    data = bpy.data.curves.new(name, 'CURVE')
+    data.dimensions = '3D'
+    if curves is None:
+        return data
+    position = _attr(curves, "position", (0.0, 0.0, 0.0))
+    left = _attr(curves, "handle_left", None)
+    right = _attr(curves, "handle_right", None)
+    left_type = _attr(curves, "handle_type_left", 0)
+    right_type = _attr(curves, "handle_type_right", 0)
+    tilt = _attr(curves, "tilt", 0.0)
+    radius = _attr(curves, "radius", 1.0)
+    curve_type = _attr(curves, "curve_type", 0)
+    cyclic = _attr(curves, "cyclic", False)
+    for ci, c in enumerate(curves.curves):
+        first, count = c.first_point_index, c.points_length
+        spline = data.splines.new('BEZIER')
+        spline.bezier_points.add(count - 1)
+        bezier = curve_type(ci) == 2 and left(first) is not None
+        for k, bp in enumerate(spline.bezier_points):
+            i = first + k
+            bp.co = position(i)
+            bp.tilt = tilt(i)
+            bp.radius = radius(i)
+            if bezier:
+                bp.handle_left_type = bp.handle_right_type = 'FREE'
+                bp.handle_left = left(i)
+                bp.handle_right = right(i)
+                bp.handle_left_type = _HANDLE_TYPES[left_type(i) % 4]
+                bp.handle_right_type = _HANDLE_TYPES[right_type(i) % 4]
+            else:
+                # Poly curves (polygons, arcs, stars) become Bezier splines with vector handles,
+                # so Fillet and the handle tools work on them.
+                bp.handle_left_type = bp.handle_right_type = 'VECTOR'
+        spline.use_cyclic_u = bool(cyclic(ci))
+    return data
+
+
 def to_editable_spline(context, obj):
     """Make a shape an editable spline: the parameters go, the splines stay. Returns the object.
     Shapes saved by earlier versions (a Geometry Nodes poly curve) are rebuilt as a curve
@@ -503,40 +543,8 @@ def to_editable_spline(context, obj):
     depsgraph.update()
     # Keep the geometry set alive while its curves are read.
     geometry = obj.evaluated_get(depsgraph).evaluated_geometry()
-    curves = geometry.curves
     name = obj.name
-    data = bpy.data.curves.new(name, 'CURVE')
-    data.dimensions = '3D'
-    if curves is not None:
-        position = _attr(curves, "position", (0.0, 0.0, 0.0))
-        left = _attr(curves, "handle_left", None)
-        right = _attr(curves, "handle_right", None)
-        left_type = _attr(curves, "handle_type_left", 0)
-        right_type = _attr(curves, "handle_type_right", 0)
-        curve_type = _attr(curves, "curve_type", 0)
-        cyclic = _attr(curves, "cyclic", False)
-        for ci, c in enumerate(curves.curves):
-            first, count = c.first_point_index, c.points_length
-            if curve_type(ci) == 2 and left(first) is not None:
-                spline = data.splines.new('BEZIER')
-                spline.bezier_points.add(count - 1)
-                for k, bp in enumerate(spline.bezier_points):
-                    i = first + k
-                    bp.co = position(i)
-                    bp.handle_left_type = bp.handle_right_type = 'FREE'
-                    bp.handle_left = left(i)
-                    bp.handle_right = right(i)
-                    bp.handle_left_type = _HANDLE_TYPES[left_type(i) % 4]
-                    bp.handle_right_type = _HANDLE_TYPES[right_type(i) % 4]
-            else:
-                # Poly curves (polygons, arcs, stars) become Bezier splines with vector handles,
-                # so Fillet and the handle tools work on them.
-                spline = data.splines.new('BEZIER')
-                spline.bezier_points.add(count - 1)
-                for k, bp in enumerate(spline.bezier_points):
-                    bp.co = position(first + k)
-                    bp.handle_left_type = bp.handle_right_type = 'VECTOR'
-            spline.use_cyclic_u = bool(cyclic(ci))
+    data = curve_from_geometry(geometry.curves, name)
     new = bpy.data.objects.new(name + ".spline", data)
     for coll in obj.users_collection:
         coll.objects.link(new)
