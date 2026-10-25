@@ -238,7 +238,40 @@ def _native_stand_in(context, obj, mod):
     return _helper_object(obj.name + " Edit Poly", edited), base
 
 
+def _begin_native_session(context, obj, mod, select_mode):
+    """Moritz 5.3+: edit the modifier's result in Edit Mode on the object itself, no stand-in."""
+    if not hasattr(mod, "session_begin") or obj.data.users > 1 or obj.data.shape_keys:
+        return False
+    edited_ob, base = _native_stand_in(context, obj, mod)
+    edited = edited_ob.data
+    try:
+        ok = mod.session_begin(base, edited)
+    except RuntimeError:
+        ok = False
+    if ok:
+        counts = dict(obj.get(BASE_COUNTS, {}))
+        counts[mod.name] = len(base.vertices)
+        obj[BASE_COUNTS] = counts
+    bpy.data.objects.remove(edited_ob, do_unlink=True)
+    for mesh in (edited, base):
+        if mesh.users == 0:
+            bpy.data.meshes.remove(mesh)
+    if not ok:
+        return False
+    for o in context.selected_objects:
+        o.select_set(False)
+    obj.select_set(True)
+    context.view_layer.objects.active = obj
+    context.scene["maximize_edit_poly_session"] = {"object": obj.name, "modifier": mod.name,
+                                                   "edited": "", "native_session": True}
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_mode(type=select_mode)
+    return True
+
+
 def begin_edit(context, obj, mod, select_mode):
+    if is_native(mod) and _begin_native_session(context, obj, mod, select_mode):
+        return
     if is_native(mod):
         edited_ob, base = _native_stand_in(context, obj, mod)
         input_name = base.name
@@ -268,8 +301,14 @@ def end_edit(context):
     if not session:
         return False
     del scene["maximize_edit_poly_session"]
-    edited_ob = bpy.data.objects.get(session["edited"])
     obj = bpy.data.objects.get(session["object"])
+    if session.get("native_session"):
+        # Leaving Edit Mode ends the session in core and stores the edit in the modifier.
+        if obj is not None and obj.mode == 'EDIT':
+            with context.temp_override(active_object=obj, object=obj):
+                bpy.ops.object.mode_set(mode='OBJECT')
+        return True
+    edited_ob = bpy.data.objects.get(session["edited"])
     if edited_ob is not None:
         if edited_ob.mode == 'EDIT' and context.view_layer.objects.active == edited_ob:
             bpy.ops.object.mode_set(mode='OBJECT')
@@ -321,7 +360,9 @@ def _depsgraph_post(scene, _depsgraph):
     session = _session(scene)
     if not session:
         return
-    edited_ob = bpy.data.objects.get(session["edited"])
+    # Native session: the object itself is in Edit Mode (core ends the session on exit).
+    watched = session["object"] if session.get("native_session") else session["edited"]
+    edited_ob = bpy.data.objects.get(watched)
     if edited_ob is None or edited_ob.mode != 'EDIT':
         bpy.app.timers.register(lambda: end_edit(bpy.context) and None, first_interval=0.0)
 

@@ -51,7 +51,12 @@ def changed_flag(me):
 # Level 1 edits the modifier's mesh in place of the object.
 bpy.ops.maximize.subobject(level='VERTEX')
 stand_in = bpy.context.active_object
-check("stand-in", stand_in is not obj and bpy.context.mode == 'EDIT_MESH', stand_in.name)
+# Moritz edits the modifier's result on the object itself (core Edit Mode session); elsewhere a
+# stand-in object takes the object's place.
+SESSION = getattr(mod, "is_editing", False)
+say("core edit session" if SESSION else "stand-in object")
+check("stand-in", (stand_in is obj if SESSION else stand_in is not obj) and
+      bpy.context.mode == 'EDIT_MESH', stand_in.name)
 bm = bmesh.from_edit_mesh(stand_in.data)
 bm.verts.ensure_lookup_table()
 v0 = bm.verts[0].co.copy()
@@ -63,7 +68,8 @@ new_verts = [e for e in ret["geom"] if isinstance(e, bmesh.types.BMVert)]
 bmesh.ops.translate(bm, verts=new_verts, vec=(0, 0, 0.5))
 bmesh.update_edit_mesh(stand_in.data)
 bpy.ops.maximize.subobject(level='OBJECT')
-check("back", bpy.context.active_object == obj and bpy.context.mode == 'OBJECT', bpy.context.active_object.name)
+check("back", bpy.context.active_object == obj and bpy.context.mode == 'OBJECT' and
+      not getattr(mod, "is_editing", False), bpy.context.active_object.name)
 
 me = evaluated(obj)
 check("edit kept", abs(me.vertices[0].co.z - (v0.z + 1.0)) < 1e-4 and len(me.vertices) == 12,

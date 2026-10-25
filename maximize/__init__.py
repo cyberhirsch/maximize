@@ -37,6 +37,7 @@ from . import (
     tools,
     primitives,
     uvw_map,
+    max_scene,
     quad_menu,
     ui,
 )
@@ -57,6 +58,7 @@ _modules = (
     tools,
     primitives,
     uvw_map,
+    max_scene,
     quad_menu,
     ui,
 )
