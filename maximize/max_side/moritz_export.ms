@@ -248,6 +248,9 @@
         local kind = mxKind obj
         format "{\"name\":%,\"class\":%,\"kind\":%" (mxStr obj.name) (mxStr ((classOf obj) as string)) (mxStr kind) to:out
         format ",\"parent\":%" (if obj.parent != undefined then mxStr obj.parent.name else "null") to:out
+        -- Max allows duplicate names: handles are unique.
+        format ",\"handle\":%" obj.inode.handle to:out
+        if obj.parent != undefined then format ",\"parent_handle\":%" obj.parent.inode.handle to:out
         format ",\"transform\":%" (mxMatrix obj.transform) to:out
         format ",\"layer\":%" (mxStr obj.layer.name) to:out
         format ",\"hidden\":%,\"frozen\":%" (if obj.isHidden then "true" else "false") (if obj.isFrozen then "true" else "false") to:out
@@ -264,8 +267,10 @@
             try (fov = obj.fov) catch ()
             format ",\"fov\":%" (mxNum fov) to:out
             local target = undefined
-            try (if obj.target != undefined then target = obj.target.name) catch ()
+            local target_handle = undefined
+            try (if obj.target != undefined then (target = obj.target.name; target_handle = obj.target.inode.handle)) catch ()
             if target != undefined then format ",\"target\":%" (mxStr target) to:out
+            if target_handle != undefined then format ",\"target_handle\":%" target_handle to:out
         )
         if kind == "LIGHT" then
         (
@@ -276,7 +281,10 @@
     )
 
     -- ------------------------------------------------------------------ main
-    local path = getSaveFileName caption:"Export for Moritz" types:"Max Scene for Moritz (*.mxscene)|*.mxscene|"
+    -- MORITZ_EXPORT_PATH set: no dialog (3dsmaxbatch.exe moritz_export.ms -sceneFile scene.max).
+    local path = systemTools.getEnvVariable "MORITZ_EXPORT_PATH"
+    if path == undefined or path == "" then
+        path = getSaveFileName caption:"Export for Moritz" types:"Max Scene for Moritz (*.mxscene)|*.mxscene|"
     if path != undefined then
     (
         local nodes = if selection.count > 0 then (selection as array) else (objects as array)

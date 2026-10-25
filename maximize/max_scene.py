@@ -99,6 +99,7 @@ class _Importer:
         self.materials = {}
         self.collections = {}
         self.objects = {}
+        self.by_name = {}
 
     def material(self, index):
         """Blender materials for an exported material: one, or one per sub-material."""
@@ -178,7 +179,9 @@ class _Importer:
         if not nd.get("renderable", True):
             ob.hide_render = True
         ob["max_class"] = nd.get("class", "")
-        self.objects[name] = (ob, nd)
+        # Max allows duplicate names: nodes are found by their handle when the file has them.
+        self.objects[nd.get("handle", len(self.objects))] = (ob, nd)
+        self.by_name.setdefault(name, ob)
         return ob
 
     def _light(self, name, params, cls):
@@ -208,23 +211,31 @@ class _Importer:
         light["max_class"] = cls
         return light
 
+    def _find(self, nd, key):
+        """The object `nd` refers to by `<key>_handle`, else by the name in `<key>`."""
+        handle = nd.get(key + "_handle")
+        if handle is not None and handle in self.objects:
+            return self.objects[handle][0]
+        name = nd.get(key)
+        return self.by_name.get(name) if name else None
+
     def run(self):
         nodes = self.data.get("nodes", [])
         for nd in nodes:
             self.node(nd)
         # Parent after all exist, keeping the world transforms.
         for ob, nd in self.objects.values():
-            parent = nd.get("parent")
-            if parent and parent in self.objects:
+            parent = self._find(nd, "parent")
+            if parent is not None and parent != ob:
                 world = ob.matrix_world.copy()
-                ob.parent = self.objects[parent][0]
+                ob.parent = parent
                 ob.matrix_world = world
         # Target cameras and lights look at their target.
         for ob, nd in self.objects.values():
-            target = nd.get("target")
-            if target and target in self.objects and ob.type in ('CAMERA', 'LIGHT'):
+            target = self._find(nd, "target")
+            if target is not None and target != ob and ob.type in ('CAMERA', 'LIGHT'):
                 con = ob.constraints.new('TRACK_TO')
-                con.target = self.objects[target][0]
+                con.target = target
         return [ob for ob, _nd in self.objects.values()]
 
 
