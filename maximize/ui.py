@@ -257,17 +257,20 @@ def draw_modify(layout, context):
             for axis in "XYZ":
                 row.operator("maximize.make_planar_axis", text=axis).axis = axis
             box.prop(context.scene.tool_settings, "use_transform_correct_face_attributes", text="Preserve UVs")
+            from .poly_tools import draw_extras
+            draw_extras(box, context)
             _draw_poly_level(layout, context)
 
 
 # Max's per-level Edit rollout: (label, operator, text) in Max's order.
 _POLY_LEVEL_TOOLS = {
-    'VERTEX': ("Edit Vertices", ("remove", "break_vertex", "chamfer", "weld", "target_weld", "connect",
+    'VERTEX': ("Edit Vertices", ("remove", "break_vertex", "extrude_max", "insert_vertex", "chamfer", "weld", "target_weld", "connect",
                                  "remove_isolated")),
-    'EDGE': ("Edit Edges", ("remove", "split", "chamfer", "weld", "target_weld", "bridge", "connect",
+    'EDGE': ("Edit Edges", ("insert_vertex", "remove", "split", "extrude_max", "chamfer", "weld", "target_weld", "bridge", "connect",
                             "create_shape", "turn", "hard", "smooth_edges")),
-    'BORDER': ("Edit Borders", ("cap", "bridge", "chamfer", "connect", "create_shape")),
-    'POLYGON': ("Edit Polygons", ("bevel_poly", "inset", "outline", "bridge", "flip", "turn", "select_by_angle",
+    'BORDER': ("Edit Borders", ("extrude_max", "insert_vertex", "cap", "bridge", "chamfer", "connect", "create_shape")),
+    'POLYGON': ("Edit Polygons", ("bevel_poly", "inset", "outline", "bridge", "flip", "hinge_from_edge",
+                                  "extrude_along_spline", "turn", "select_by_angle",
                                   "create_poly")),
     'ELEMENT': ("Edit Elements", ("flip", "create_poly")),
 }
@@ -287,6 +290,9 @@ def _draw_poly_level(layout, context):
             grid.operator("maximize." + op, text="Bevel", translate=False)
         else:
             grid.operator("maximize." + op)
+    if level in {'VERTEX', 'EDGE'}:
+        from .poly_tools import draw_edge_properties
+        draw_edge_properties(box, level)
     overlay = getattr(context.space_data, "overlay", None)
     if level == 'EDGE' and overlay is not None:
         box.prop(overlay, "show_edge_sharp", text="Display Hard Edges")

@@ -110,4 +110,55 @@ r = bpy.ops.maximize.outline(amount=0.1)
 bm = bmesh.from_edit_mesh(bpy.context.edit_object.data)
 xs = sorted({round(v.co.x, 4) for v in bm.verts})
 check("outline", r == {'FINISHED'} and xs == [-1.1, 0.0, 1.1] and len(bm.verts) == 9, xs, len(bm.verts))
+# Vertex extrude: the centre of a 2x2 grid becomes a pyramid tip 0.3 up; its 4 edges are cut.
+def grid():
+    bpy.ops.object.mode_set(mode='OBJECT')
+    bpy.ops.mesh.primitive_grid_add(x_subdivisions=2, y_subdivisions=2, size=2)
+    bpy.ops.object.mode_set(mode='EDIT')
+    bm = bmesh.from_edit_mesh(bpy.context.edit_object.data)
+    bpy.ops.mesh.select_all(action='DESELECT')
+    return bm
+
+
+bm = grid()
+bpy.ops.mesh.select_mode(type='VERT')
+bm = bmesh.from_edit_mesh(bpy.context.edit_object.data)
+centre = min(bm.verts, key=lambda v: v.co.length)
+centre.select = True
+bmesh.update_edit_mesh(bpy.context.edit_object.data)
+r = bpy.ops.maximize.extrude_max(height=0.3, width=0.2)
+bm = bmesh.from_edit_mesh(bpy.context.edit_object.data)
+tip = [v for v in bm.verts if v.select]
+ring = [v for v in bm.verts if abs(v.co.z) < 1e-6 and abs(v.co.length - 0.2) < 1e-4]
+check("vertex extrude", r == {'FINISHED'} and len(tip) == 1 and abs(tip[0].co.z - 0.3) < 1e-5 and
+      tip[0].co.xy.length < 1e-5 and len(ring) == 4, r, [tuple(v.co) for v in tip], len(ring), len(bm.verts))
+
+# Edge extrude: the middle edge of the grid becomes a ridge 0.3 up.
+bm = grid()
+bpy.ops.mesh.select_mode(type='EDGE')
+bm = bmesh.from_edit_mesh(bpy.context.edit_object.data)
+middle = [e for e in bm.edges if all(abs(v.co.x) < 1e-6 for v in e.verts)]
+for e in middle:
+    e.select = True
+bmesh.update_edit_mesh(bpy.context.edit_object.data)
+r = bpy.ops.maximize.extrude_max(height=0.3, width=0.2)
+bm = bmesh.from_edit_mesh(bpy.context.edit_object.data)
+ridge = [v for v in bm.verts if v.select]
+side = [v for v in bm.verts if abs(abs(v.co.x) - 0.2) < 1e-4 and abs(v.co.z) < 1e-6]
+check("edge extrude", r == {'FINISHED'} and len(ridge) == 3 and all(abs(v.co.z - 0.3) < 1e-5 and abs(v.co.x) < 1e-5
+      for v in ridge) and len(side) == 6, r, [tuple(round(c, 3) for c in v.co) for v in ridge], len(side))
+# Border extrude: the grid's border gets a rim 0.3 up and 0.2 out.
+bm = grid()
+bpy.context.scene["maximize_level"] = 'BORDER'
+bpy.ops.mesh.select_mode(type='EDGE')
+bm = bmesh.from_edit_mesh(bpy.context.edit_object.data)
+for e in bm.edges:
+    e.select = e.is_boundary
+bmesh.update_edit_mesh(bpy.context.edit_object.data)
+r = bpy.ops.maximize.extrude_max(height=0.3, width=0.2)
+bm = bmesh.from_edit_mesh(bpy.context.edit_object.data)
+rim = [v for v in bm.verts if abs(v.co.z - 0.3) < 1e-5]
+check("border extrude", r == {'FINISHED'} and len(rim) == 8 and
+      all(abs(max(abs(v.co.x), abs(v.co.y)) - 1.2) < 1e-4 for v in rim) and len(bm.faces) == 12,
+      r, len(rim), len(bm.faces), sorted({round(max(abs(v.co.x), abs(v.co.y)), 3) for v in rim}))
 say("DONE")

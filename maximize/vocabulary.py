@@ -93,7 +93,6 @@ ALIASES = (
     ("swift_loop", "Swift Loop", "mesh.loopcut_slide", {}, 'POLY', "Insert an edge loop and slide it"),
     ("cut", "Cut", "mesh.knife_tool", {}, 'POLY', "Cut new edges across polygons"),
     ("quickslice", "QuickSlice", "mesh.bisect", {}, 'POLY', "Slice the selection with a plane"),
-    ("cap", "Cap", "mesh.fill", {}, 'POLY', "Fill a border with a polygon"),
     ("bridge", "Bridge", "mesh.bridge_edge_loops", {}, 'POLY', "Connect two borders or edge loops with polygons"),
     ("detach", "Detach", "mesh.separate", {"type": 'SELECTED'}, 'POLY', "Detach the selection to a new object"),
     ("remove", "Remove", "mesh.dissolve_mode", {}, 'POLY', "Remove the selection without leaving a hole"),
