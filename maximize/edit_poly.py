@@ -16,6 +16,10 @@ below changes, the edits are kept as they were and the panel warns.
 
 Editing (1–5 on an object whose active modifier is Edit Poly) re-bases first: Base becomes the
 current input and Edited the current result, then you edit Edited in place of the object.
+
+In Moritz the modifier is the native `EDIT_POLY` modifier instead (no node group, no helper
+objects, survives stock Blender): editing still happens on a stand-in object, and leaving the
+level hands the result to the modifier with `store(input, edited)`.
 """
 
 import bmesh
@@ -74,9 +78,18 @@ def build_group():
     return g.tree
 
 
+def native():
+    """Moritz has the Edit Poly modifier in core."""
+    return hasattr(bpy.types, "EditPolyModifier")
+
+
+def is_native(mod):
+    return mod is not None and mod.type == 'EDIT_POLY'
+
+
 def is_edit_poly(mod):
-    return mod is not None and mod.type == 'NODES' and mod.node_group is not None and \
-        mod.node_group.get("maximize_kind") == "edit_poly"
+    return is_native(mod) or (mod is not None and mod.type == 'NODES' and mod.node_group is not None and
+                              mod.node_group.get("maximize_kind") == "edit_poly")
 
 
 def active_edit_poly(obj):
@@ -175,6 +188,9 @@ class MAXIMIZE_OT_edit_poly_add(Operator):
 
     def execute(self, context):
         obj = context.active_object
+        if native():
+            obj.modifiers.active = obj.modifiers.new("Edit Poly", 'EDIT_POLY')
+            return {'FINISHED'}
         mod = obj.modifiers.new("Edit Poly", 'NODES')
         mod.node_group = build_group()
         base = bpy.data.meshes.new(obj.name + " Edit Poly Base")
@@ -204,9 +220,32 @@ def _session(scene):
     return session.to_dict() if session is not None else None
 
 
+BASE_COUNTS = "maximize_edit_poly_base"
+
+
+def _native_stand_in(context, obj, mod):
+    """A stand-in object holding the modifier's current result, with `mx_orig` into its input."""
+    base = _evaluated_mesh(context, obj, mod, include=False)
+    edited = _evaluated_mesh(context, obj, mod, include=True)
+    counts = obj.get(BASE_COUNTS, {})
+    if ORIG not in edited.attributes:
+        _set_orig(edited)
+    elif counts.get(mod.name, len(base.vertices)) != len(base.vertices):
+        # The topology below changed since the last edit: follow the nearest new vertex.
+        _remap_nearest(edited, base)
+    base.name = obj.name + " Edit Poly Input"
+    edited.name = obj.name + " Edit Poly"
+    return _helper_object(obj.name + " Edit Poly", edited), base
+
+
 def begin_edit(context, obj, mod, select_mode):
-    rebase(context, obj, mod)
-    _base_ob, edited_ob = _helpers(mod)
+    if is_native(mod):
+        edited_ob, base = _native_stand_in(context, obj, mod)
+        input_name = base.name
+    else:
+        rebase(context, obj, mod)
+        _base_ob, edited_ob = _helpers(mod)
+        input_name = ""
     for o in context.selected_objects:
         o.select_set(False)
     context.scene.collection.objects.link(edited_ob)
@@ -217,7 +256,7 @@ def begin_edit(context, obj, mod, select_mode):
     edited_ob.select_set(True)
     context.view_layer.objects.active = edited_ob
     context.scene["maximize_edit_poly_session"] = {"object": obj.name, "modifier": mod.name,
-                                                   "edited": edited_ob.name}
+                                                   "edited": edited_ob.name, "input": input_name}
     bpy.ops.object.mode_set(mode='EDIT')
     bpy.ops.mesh.select_mode(type=select_mode)
 
@@ -238,12 +277,31 @@ def end_edit(context):
         _sanitize_orig(edited_ob.data)
         for coll in list(edited_ob.users_collection):
             coll.objects.unlink(edited_ob)
+        _native_store(obj, session, edited_ob)
     if obj is not None:
         obj.hide_set(False)
         obj.select_set(True)
         context.view_layer.objects.active = obj
         obj.update_tag()
     return True
+
+
+def _native_store(obj, session, edited_ob):
+    """Native modifier: hand the edited mesh to it and drop the stand-in."""
+    base = bpy.data.meshes.get(session.get("input", "")) if session.get("input") else None
+    if base is None:
+        return
+    mod = obj.modifiers.get(session["modifier"]) if obj is not None else None
+    if is_native(mod):
+        mod.store(base, edited_ob.data)
+        counts = dict(obj.get(BASE_COUNTS, {}))
+        counts[mod.name] = len(base.vertices)
+        obj[BASE_COUNTS] = counts
+    edited = edited_ob.data
+    bpy.data.objects.remove(edited_ob, do_unlink=True)
+    for mesh in (edited, base):
+        if mesh.users == 0:
+            bpy.data.meshes.remove(mesh)
 
 
 def _sanitize_orig(mesh):
@@ -295,7 +353,7 @@ def _apply_through(context, obj, mod):
     while obj.modifiers:
         first = obj.modifiers[0]
         name = first.name
-        helpers = _helpers(first) if is_edit_poly(first) else ()
+        helpers = _helpers(first) if is_edit_poly(first) and not is_native(first) else ()
         with context.temp_override(object=obj, active_object=obj):
             bpy.ops.object.modifier_apply(modifier=name)
         for helper in helpers:
@@ -309,6 +367,8 @@ def _apply_through(context, obj, mod):
             break
     if ORIG in obj.data.attributes:
         obj.data.attributes.remove(obj.data.attributes[ORIG])
+    if BASE_COUNTS in obj:
+        del obj[BASE_COUNTS]
 
 
 class MAXIMIZE_OT_collapse_to(Operator):

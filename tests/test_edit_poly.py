@@ -38,7 +38,15 @@ disp.mid_level = 0.0
 
 bpy.ops.maximize.edit_poly_add()
 mod = obj.modifiers.active
+NATIVE = edit_poly.is_native(mod)
+say("native modifier" if NATIVE else "geometry nodes prototype")
 check("added", edit_poly.is_edit_poly(mod), [m.name for m in obj.modifiers])
+
+
+def changed_flag(me):
+    """The prototype's topology warning; the native modifier warns in its panel instead."""
+    flag = me.attributes.get(edit_poly.CHANGED)
+    return None if flag is None else bool(flag.data[0].value)
 
 # Level 1 edits the modifier's mesh in place of the object.
 bpy.ops.maximize.subobject(level='VERTEX')
@@ -68,8 +76,7 @@ check("follows below", abs(me.vertices[0].co.z - (v0.z + 3.0)) < 1e-4, round(me.
 top = max(me.vertices, key=lambda v: v.co.z).co.z
 # The extruded copy of vertex 0 (moved up 1, then extruded 0.5) rides along too.
 check("extruded follows", abs(top - (v0.z + 1.0 + 0.5 + 2.0)) < 1e-4, round(top, 3))
-flag = me.attributes.get(edit_poly.CHANGED)
-check("no warning", flag is not None and not flag.data[0].value)
+check("no warning", NATIVE or changed_flag(me) is False)
 
 # Topology change below: the edits stay as they were and the flag warns.
 sub = obj.modifiers.new("Subdivision", 'SUBSURF')
@@ -77,16 +84,15 @@ sub.levels = 1
 with bpy.context.temp_override(object=obj):
     bpy.ops.object.modifier_move_to_index(modifier=sub.name, index=1)
 me = evaluated(obj)
-flag = me.attributes.get(edit_poly.CHANGED)
-check("topology warning", flag is not None and flag.data[0].value and len(me.vertices) == 12, len(me.vertices))
+check("topology warning", (NATIVE or changed_flag(me)) and len(me.vertices) == 12, len(me.vertices))
 
 # Editing again re-bases onto the new input.
 obj.modifiers.active = obj.modifiers["Edit Poly"]
 bpy.ops.maximize.subobject(level='POLYGON')
 bpy.ops.maximize.subobject(level='OBJECT')
 me = evaluated(obj)
-flag = me.attributes.get(edit_poly.CHANGED)
-check("re-based", flag is not None and not flag.data[0].value, len(me.vertices))
+check("re-based", (changed_flag(me) is False) if not NATIVE else
+      (mod.edit_mode == 'TOPOLOGY' and len(me.vertices) == 12), len(me.vertices))
 
 helpers = [o.name for o in bpy.data.objects if o.get(edit_poly.TAG)]
 obj.modifiers.active = obj.modifiers["Edit Poly"]
