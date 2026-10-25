@@ -276,6 +276,37 @@ def _grid_plane(rv3d):
     return tuple(Vector([round(c) for c in axis]) for axis in axes)
 
 
+def autogrid_hit(context, region, mouse):
+    """Max's AutoGrid: (point, u, v, normal) of the surface under the mouse when AutoGrid is on,
+    else None."""
+    if not context.scene.get("maximize_autogrid"):
+        return None
+    rv3d = region.data
+    origin = view3d_utils.region_2d_to_origin_3d(region, rv3d, mouse)
+    direction = view3d_utils.region_2d_to_vector_3d(region, rv3d, mouse)
+    hit, location, normal, _index, _obj, _matrix = context.scene.ray_cast(
+        context.evaluated_depsgraph_get(), origin, direction)
+    if not hit:
+        return None
+    normal = normal.normalized()
+    # A tangent axis: the world X projected onto the surface, or Y when X is along the normal.
+    u = Vector((1, 0, 0)) if abs(normal.x) < 0.9 else Vector((0, 1, 0))
+    u = (u - normal * u.dot(normal)).normalized()
+    return location, u, normal.cross(u), normal
+
+
+class MAXIMIZE_OT_autogrid(Operator):
+    """AutoGrid, as in Max: new objects are built on the surface under the mouse"""
+    bl_idname = "maximize.autogrid"
+    bl_label = "AutoGrid"
+    bl_options = {'REGISTER'}
+
+    def execute(self, context):
+        context.scene["maximize_autogrid"] = not context.scene.get("maximize_autogrid", False)
+        self.report({'INFO'}, "AutoGrid " + ("on" if context.scene["maximize_autogrid"] else "off"))
+        return {'FINISHED'}
+
+
 class MAXIMIZE_OT_add_primitive(Operator):
     """Create an editable primitive: drag in the viewport to size it, as in Max. Its parameters stay
     editable until you collapse it"""
@@ -335,7 +366,7 @@ class MAXIMIZE_OT_add_primitive(Operator):
         co = self._mouse(event)
         origin = view3d_utils.region_2d_to_origin_3d(self._region, rv3d, co)
         direction = view3d_utils.region_2d_to_vector_3d(self._region, rv3d, co)
-        return intersect_line_plane(origin, origin + direction, Vector(), self._n)
+        return intersect_line_plane(origin, origin + direction, self._plane_origin, self._n)
 
     def _input(self, name):
         return parameter(self._obj, name)
@@ -374,6 +405,11 @@ class MAXIMIZE_OT_add_primitive(Operator):
         if self._region is None:
             return False
         self._u, self._v, self._n = _grid_plane(self._region.data)
+        self._plane_origin = Vector()
+        surface = autogrid_hit(context, self._region, self._mouse(event))
+        if surface is not None:
+            # AutoGrid: build on the surface under the mouse, facing out of it.
+            self._plane_origin, self._u, self._v, self._n = surface
         hit = self._hit(event)
         if hit is None:
             return False
@@ -438,6 +474,59 @@ class MAXIMIZE_OT_add_primitive(Operator):
         return {'RUNNING_MODAL'}
 
 
+def _entry_fields(kind):
+    """(property, parameter name) pairs Keyboard Entry offers for a kind, from its creation steps."""
+    fields = []
+    for step in STEPS[kind]:
+        if step == 'RECT':
+            fields += [("length", "Length"), ("width", "Width")]
+        elif step == 'RADIUS':
+            fields.append(("radius", _RADIUS_INPUT.get(kind, "Radius 1")))
+        elif step == 'RADIUS2':
+            fields.append(("radius2", "Radius 2"))
+        elif step == 'HEIGHT':
+            fields.append(("height", "Height"))
+    return fields
+
+
+class MAXIMIZE_OT_keyboard_entry(Operator):
+    """Keyboard Entry, as in Max: create a primitive or shape at a typed position with typed sizes"""
+    bl_idname = "maximize.keyboard_entry"
+    bl_label = "Keyboard Entry"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    kind: EnumProperty(name="Type", items=KINDS)
+    location: bpy.props.FloatVectorProperty(name="Position", subtype='TRANSLATION', unit='LENGTH')
+    length: bpy.props.FloatProperty(name="Length", default=1.0, min=0.0, unit='LENGTH')
+    width: bpy.props.FloatProperty(name="Width", default=1.0, min=0.0, unit='LENGTH')
+    radius: bpy.props.FloatProperty(name="Radius", default=0.5, min=0.0, unit='LENGTH')
+    radius2: bpy.props.FloatProperty(name="Radius 2", default=0.25, min=0.0, unit='LENGTH')
+    height: bpy.props.FloatProperty(name="Height", default=1.0, unit='LENGTH')
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'OBJECT'
+
+    def invoke(self, context, _event):
+        self.location = context.scene.cursor.location
+        return context.window_manager.invoke_props_dialog(self)
+
+    def draw(self, _context):
+        layout = self.layout
+        layout.use_property_split = True
+        layout.prop(self, "kind")
+        layout.prop(self, "location")
+        for prop, name in _entry_fields(self.kind):
+            layout.prop(self, prop, text=name)
+
+    def execute(self, context):
+        obj = _create_object(context, self.kind, Matrix.Translation(self.location))
+        for prop, name in _entry_fields(self.kind):
+            parameter(obj, name).value = getattr(self, prop)
+        obj.update_tag()
+        return {'FINISHED'}
+
+
 class MAXIMIZE_MT_create(bpy.types.Menu):
     bl_label = "Standard Primitives"
     bl_idname = "MAXIMIZE_MT_create"
@@ -447,6 +536,14 @@ class MAXIMIZE_MT_create(bpy.types.Menu):
         for ident, name, _desc, icon, _num in KINDS:
             if ident not in SHAPES:
                 layout.operator("maximize.add_primitive", text=name, icon=icon).kind = ident
+        _draw_create_options(layout)
+
+
+def _draw_create_options(layout):
+    layout.separator()
+    layout.operator("maximize.keyboard_entry", icon='KEYINGSET')
+    layout.operator("maximize.autogrid", icon='CHECKBOX_HLT' if bpy.context.scene.get("maximize_autogrid")
+                    else 'CHECKBOX_DEHLT')
 
 
 class MAXIMIZE_MT_create_shapes(bpy.types.Menu):
@@ -458,6 +555,10 @@ class MAXIMIZE_MT_create_shapes(bpy.types.Menu):
         layout.operator("maximize.line", icon='IPO_LINEAR')
         for ident, name, _desc, icon, _num in SHAPE_KINDS:
             layout.operator("maximize.add_primitive", text=name, icon=icon).kind = ident
+        layout.operator("object.text_add", text="Text", icon='OUTLINER_OB_FONT')
+        layout.operator("maximize.freehand", icon='GREASEPENCIL')
+        layout.operator("maximize.section", icon='MOD_BOOLEAN')
+        _draw_create_options(layout)
 
 
 def is_shape(obj):
@@ -494,6 +595,8 @@ classes = (
     MAXIMIZE_MT_create,
     MAXIMIZE_MT_create_shapes,
     MAXIMIZE_OT_convert_spline,
+    MAXIMIZE_OT_keyboard_entry,
+    MAXIMIZE_OT_autogrid,
 )
 
 

@@ -155,7 +155,12 @@ from mathutils import Vector
 
 class _FakeLine:
     _obj = None
-    _points = [(Vector((0, 0, 0)), None), (Vector((1, 0, 0)), Vector((1.5, 0.5, 0))), (Vector((1, 1, 0)), None)]
+    _target = None
+    _points = [(Vector((0, 0, 0)), None, 'CORNER'), (Vector((1, 0, 0)), Vector((1.5, 0.5, 0)), 'BEZIER'),
+               (Vector((1, 1, 0)), None, 'CORNER')]
+
+    def _vertex(self, co, handle, kind):
+        return MAXIMIZE_OT_line._vertex(self, co, handle, kind)
 
 
 fake = _FakeLine()
@@ -292,3 +297,32 @@ bpy.ops.object.mode_set(mode='EDIT')
 bpy.ops.maximize.spline_explode()
 parts = [o for o in bpy.data.objects if o.name == "Ex" or o.name.startswith("Ex.")]
 check("explode", len(parts) == 3 and all(len(o.data.splines) == 1 for o in parts), [o.name for o in parts])
+
+# Creation: Keyboard Entry, Section, Freehand.
+if ctx.mode != 'OBJECT':
+    bpy.ops.object.mode_set(mode='OBJECT')
+bpy.ops.maximize.keyboard_entry(kind='CIRCLE', location=(1, 2, 3), radius=2.5)
+ke = ctx.active_object
+check("keyboard entry", ke.type == 'CURVE' and tuple(ke.location) == (1, 2, 3) and
+      abs(ke.data.splines[0].bezier_points[0].co.x - 2.5) < 1e-6, ke.name, tuple(ke.location))
+bpy.ops.maximize.keyboard_entry(kind='BOX', location=(0, 0, 0), length=2, width=3, height=4)
+box3 = ctx.active_object
+check("keyboard entry box", abs(primitives.parameter(box3, "Height").value - 4) < 1e-6 and
+      abs(primitives.parameter(box3, "Width").value - 3) < 1e-6)
+ctx.scene.cursor.location = (0, 0, 2)
+ctx.scene.cursor.rotation_euler = (0, 0, 0)
+for o in ctx.selected_objects:
+    o.select_set(False)
+box3.select_set(True)
+ctx.view_layer.objects.active = box3
+r = bpy.ops.maximize.section()
+sec = ctx.active_object
+pts = [bp.co for s in sec.data.splines for bp in s.bezier_points]
+check("section", r == {'FINISHED'} and len(sec.data.splines) == 1 and sec.data.splines[0].use_cyclic_u and
+      len(pts) == 4 and all(abs(p.z - 2) < 1e-5 for p in pts) and abs(max(p.x for p in pts) - 1.5) < 1e-5,
+      sec.name, len(sec.data.splines), len(pts))
+ctx.scene.cursor.location = (0, 0, 0)
+r = bpy.ops.maximize.freehand()
+check("freehand", r == {'FINISHED'} and ctx.mode == 'EDIT_CURVE' and ctx.active_object.name.startswith("Freehand"))
+bpy.ops.object.mode_set(mode='OBJECT')
+check("autogrid off", primitives.autogrid_hit(ctx, None, None) is None)

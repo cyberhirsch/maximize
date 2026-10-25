@@ -12,7 +12,7 @@ Shapes are treated as lying in their object's local XY plane, as Max's shapes do
 import math
 
 import bpy
-from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty
+from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
 from bpy.types import Operator
 from bpy_extras import view3d_utils
 from mathutils import Vector
@@ -435,12 +435,27 @@ class MAXIMIZE_OT_shape_boolean(Operator):
 # Line tool
 
 
+LINE_TYPES = (
+    ('CORNER', "Corner", "Sharp vertex"),
+    ('SMOOTH', "Smooth", "Smooth vertex, handles set automatically"),
+    ('BEZIER', "Bezier", "Smooth vertex whose handles follow the drag"),
+)
+
+
 class MAXIMIZE_OT_line(Operator):
-    """Line: click for corners, drag for curved points; click the first point to close, right-click
-    or Esc to finish. Snaps to the grid while snapping is on"""
+    """Line, as in Max: click for Initial Type vertices, drag for Drag Type vertices; Shift keeps
+    90 degree angles, Backspace removes the last vertex, clicking the first vertex closes the
+    spline; right-click or Esc to finish. Snaps to the grid while snapping is on"""
     bl_idname = "maximize.line"
     bl_label = "Line"
     bl_options = {'REGISTER', 'UNDO'}
+
+    initial_type: EnumProperty(name="Initial Type", items=LINE_TYPES[:2], default='CORNER',
+                               description="Type of a vertex made by a click")
+    drag_type: EnumProperty(name="Drag Type", items=LINE_TYPES, default='BEZIER',
+                            description="Type of a vertex made by a drag")
+    start_new_shape: BoolProperty(name="Start New Shape", default=True,
+                                  description="Off: the line is added as a new spline to the selected shape")
 
     @classmethod
     def poll(cls, context):
@@ -448,7 +463,13 @@ class MAXIMIZE_OT_line(Operator):
 
     def invoke(self, context, _event):
         self._obj = None
-        self._points = []      # fixed points: (co, handle or None)
+        self._target = None    # Start New Shape off: the shape that gets the new spline
+        active = context.active_object
+        if not self.start_new_shape and active is not None and active.type == 'CURVE' and active.select_get():
+            self._target = active
+            self._keep = len(active.data.splines)
+        self._points = []      # fixed points: (co, handle or None, vertex type)
+        self._plane = None     # AutoGrid: (origin, normal) of the surface under the first click
         self._press = None     # (co, mouse) where the button went down
         self._drag = None
         self._region = None
@@ -465,25 +486,47 @@ class MAXIMIZE_OT_line(Operator):
         return None
 
     def _hit(self, context, mouse):
-        """The point under the mouse on the construction plane, as for the primitives."""
+        """The point under the mouse on the construction plane, as for the primitives; with AutoGrid
+        the plane is the surface under the first click."""
         from .primitives import _grid_plane
         region = self._region
         rv3d = region.data
-        normal = _grid_plane(rv3d)[2]
+        plane_origin, normal = self._plane if self._plane is not None else (Vector(), _grid_plane(rv3d)[2])
         origin = view3d_utils.region_2d_to_origin_3d(region, rv3d, mouse)
         direction = view3d_utils.region_2d_to_vector_3d(region, rv3d, mouse)
-        hit = intersect_line_plane(origin, origin + direction, Vector(), normal)
+        hit = intersect_line_plane(origin, origin + direction, plane_origin, normal)
         if hit is not None and context.tool_settings.use_snap:
             step = context.space_data.overlay.grid_scale_unit or 1.0
             hit = Vector([round(c / step) * step for c in hit])
         return hit
 
+    def _orthogonal(self, last, hit):
+        from .primitives import _grid_plane
+        u, v, _n = _grid_plane(self._region.data)
+        d = hit - last
+        du, dv = d.dot(u), d.dot(v)
+        return last + (u * du if abs(du) >= abs(dv) else v * dv)
+
     def _screen(self, co):
         p = view3d_utils.location_3d_to_region_2d(self._region, self._region.data, co)
         return p if p is not None else Vector((1e9, 1e9))
 
+    def _vertex(self, co, handle, kind):
+        if kind == 'BEZIER' and handle is not None:
+            return _Point(co, co - (handle - co), handle, 'ALIGNED', 'ALIGNED')
+        if kind == 'SMOOTH':
+            return _Point(co, co, co, 'AUTO', 'AUTO')
+        return _Point(co)
+
     def _rebuild(self, context, points):
-        """Write `points` [(co, handle or None)] into the line's one spline."""
+        """Write `points` [(co, handle or None, type)] into the line's spline."""
+        if self._target is not None:
+            curve = self._target.data
+            for spline in list(curve.splines)[self._keep:]:
+                curve.splines.remove(spline)
+            local = self._target.matrix_world.inverted()
+            return _write(curve, None, [self._vertex(local @ co, None if h is None else local @ h, k)
+                                        for co, h, k in points], cyclic=False)
         if self._obj is None:
             data = bpy.data.curves.new("Line", 'CURVE')
             data.dimensions = '3D'
@@ -498,15 +541,16 @@ class MAXIMIZE_OT_line(Operator):
             context.view_layer.objects.active = self._obj
         curve = self._obj.data
         curve.splines.clear()
-        _write(curve, None, [_Point(co) if handle is None else
-                             _Point(co, co - (handle - co), handle, 'ALIGNED', 'ALIGNED')
-                             for co, handle in points], cyclic=False)
+        _write(curve, None, [self._vertex(co, h, k) for co, h, k in points], cyclic=False)
         return curve.splines[0]
 
     def _finish(self, context, close=False):
         context.workspace.status_text_set(None)
         if len(self._points) < 2:
-            if self._obj is not None:
+            if self._target is not None:
+                for spline in list(self._target.data.splines)[self._keep:]:
+                    self._target.data.splines.remove(spline)
+            elif self._obj is not None:
                 data = self._obj.data
                 bpy.data.objects.remove(self._obj)
                 bpy.data.curves.remove(data)
@@ -524,27 +568,168 @@ class MAXIMIZE_OT_line(Operator):
             return {'PASS_THROUGH'} if self._press is None else {'RUNNING_MODAL'}
         self._region = region
         mouse = Vector((event.mouse_x - region.x, event.mouse_y - region.y))
+        if event.type == 'BACK_SPACE' and event.value == 'PRESS':
+            # Max: Backspace removes the last vertex.
+            if self._points:
+                self._points.pop()
+                if self._points:
+                    self._rebuild(context, self._points)
+            return {'RUNNING_MODAL'}
         hit = self._hit(context, mouse)
         if hit is None:
             return {'RUNNING_MODAL'}
+        if event.shift and self._points and self._press is None:
+            # Max: Shift keeps the new segment at 90 degrees, along the construction plane's axes.
+            hit = self._orthogonal(self._points[-1][0], hit)
+        if event.type == 'LEFTMOUSE' and event.value == 'PRESS' and not self._points and self._plane is None:
+            from .primitives import autogrid_hit
+            surface = autogrid_hit(context, region, mouse)
+            if surface is not None:
+                self._plane = (surface[0], surface[3])
+                hit = self._hit(context, mouse)
         if event.type == 'LEFTMOUSE' and event.value == 'PRESS':
             if len(self._points) >= 2 and (self._screen(self._points[0][0]) - mouse).length < 10:
-                return self._finish(context, close=True)
+                # Max asks "Close spline?" when the first vertex is clicked.
+                result = self._finish(context)
+                obj = self._target or self._obj
+                if result == {'FINISHED'} and obj is not None:
+                    bpy.ops.maximize.line_close_confirm('INVOKE_DEFAULT', object_name=obj.name)
+                return result
             self._press = (hit, mouse)
             self._drag = None
         elif event.type == 'LEFTMOUSE' and event.value == 'RELEASE' and self._press is not None:
-            self._points.append((self._press[0], self._drag))
+            kind = self.initial_type if self._drag is None else self.drag_type
+            self._points.append((self._press[0], self._drag, kind))
             self._press = self._drag = None
-            self._rebuild(context, self._points + [(hit, None)])
+            self._rebuild(context, self._points + [(hit, None, 'CORNER')])
         elif event.type == 'MOUSEMOVE':
             if self._press is not None:
                 if (mouse - self._press[1]).length > 4:
                     self._drag = hit
-                self._rebuild(context, self._points + [(self._press[0], self._drag)])
+                kind = self.initial_type if self._drag is None else self.drag_type
+                self._rebuild(context, self._points + [(self._press[0], self._drag, kind)])
             elif self._points:
-                self._rebuild(context, self._points + [(hit, None)])
+                self._rebuild(context, self._points + [(hit, None, 'CORNER')])
         context.area.tag_redraw()
         return {'RUNNING_MODAL'}
+
+
+class MAXIMIZE_OT_line_close_confirm(Operator):
+    """Close the spline just drawn"""
+    bl_idname = "maximize.line_close_confirm"
+    bl_label = "Close spline?"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    object_name: StringProperty(options={'HIDDEN', 'SKIP_SAVE'})
+
+    def invoke(self, context, _event):
+        return context.window_manager.invoke_confirm(self, None, title="Close spline?", confirm_text="Yes")
+
+    def execute(self, _context):
+        obj = bpy.data.objects.get(self.object_name)
+        if obj is None or obj.type != 'CURVE' or not obj.data.splines:
+            return {'CANCELLED'}
+        obj.data.splines[-1].use_cyclic_u = True
+        return {'FINISHED'}
+
+
+class MAXIMIZE_OT_freehand(Operator):
+    """Freehand, as in Max: draw a new spline with the mouse (Blender's Draw tool on a new shape)"""
+    bl_idname = "maximize.freehand"
+    bl_label = "Freehand"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'OBJECT'
+
+    def execute(self, context):
+        from .primitives import _max_name
+        name = _max_name("Freehand")
+        data = bpy.data.curves.new(name, 'CURVE')
+        data.dimensions = '3D'
+        obj = bpy.data.objects.new(name, data)
+        context.collection.objects.link(obj)
+        for o in context.selected_objects:
+            o.select_set(False)
+        obj.select_set(True)
+        context.view_layer.objects.active = obj
+        bpy.ops.object.mode_set(mode='EDIT')
+        context.scene["maximize_level"] = 'VERTEX'
+        if context.area is not None and context.area.type == 'VIEW_3D':
+            bpy.ops.wm.tool_set_by_id(name="builtin.draw")
+        return {'FINISHED'}
+
+
+def section_curve(context, objects, origin, normal, name="Section"):
+    """Max's Section > Create Shape: where the plane (origin, normal) cuts the meshes, as a shape
+    of corner vertices. Returns the new object, or None if nothing is cut."""
+    import bmesh
+    depsgraph = context.evaluated_depsgraph_get()
+    loops = []
+    for obj in objects:
+        if obj.type != 'MESH':
+            continue
+        bm = bmesh.new()
+        bm.from_object(obj, depsgraph)
+        bm.transform(obj.matrix_world)
+        geom = bm.verts[:] + bm.edges[:] + bm.faces[:]
+        cut = bmesh.ops.bisect_plane(bm, geom=geom, plane_co=origin, plane_no=normal, dist=1e-6)
+        edges = {e for e in cut["geom_cut"] if isinstance(e, bmesh.types.BMEdge)}
+        # Chain the cut edges into polylines.
+        while edges:
+            edge = edges.pop()
+            chain = [edge.verts[0], edge.verts[1]]
+            for at_end in (True, False):
+                while True:
+                    v = chain[-1] if at_end else chain[0]
+                    nxt = next((e for e in v.link_edges if e in edges), None)
+                    if nxt is None:
+                        break
+                    edges.discard(nxt)
+                    other = nxt.other_vert(v)
+                    if at_end:
+                        chain.append(other)
+                    else:
+                        chain.insert(0, other)
+            closed = len(chain) > 2 and chain[0] == chain[-1]
+            loops.append(([v.co.copy() for v in (chain[:-1] if closed else chain)], closed))
+        bm.free()
+    if not loops:
+        return None
+    from .primitives import _max_name
+    data = bpy.data.curves.new(name, 'CURVE')
+    data.dimensions = '3D'
+    for points, closed in loops:
+        _write(data, None, [_Point(co) for co in points], cyclic=closed)
+    obj = bpy.data.objects.new(_max_name(name), data)
+    context.collection.objects.link(obj)
+    return obj
+
+
+class MAXIMIZE_OT_section(Operator):
+    """Section, as in Max: a shape where a plane through the 3D cursor (its Z axis as the normal)
+    cuts the selected meshes"""
+    bl_idname = "maximize.section"
+    bl_label = "Section"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'OBJECT' and any(o.type == 'MESH' for o in context.selected_objects)
+
+    def execute(self, context):
+        cursor = context.scene.cursor
+        normal = cursor.matrix.to_3x3() @ Vector((0, 0, 1))
+        obj = section_curve(context, context.selected_objects, cursor.location.copy(), normal)
+        if obj is None:
+            self.report({'WARNING'}, "The section plane cuts none of the selected meshes")
+            return {'CANCELLED'}
+        for o in context.selected_objects:
+            o.select_set(False)
+        obj.select_set(True)
+        context.view_layer.objects.active = obj
+        return {'FINISHED'}
 
 
 # ------------------------------------------------------------------------------
@@ -1410,6 +1595,9 @@ def _menu_curve(self, _context):
 
 classes = (
     MAXIMIZE_OT_line,
+    MAXIMIZE_OT_line_close_confirm,
+    MAXIMIZE_OT_freehand,
+    MAXIMIZE_OT_section,
     MAXIMIZE_OT_spline_break,
     MAXIMIZE_OT_spline_trim,
     MAXIMIZE_OT_spline_extend,
