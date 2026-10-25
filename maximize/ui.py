@@ -252,6 +252,49 @@ def draw_modify(layout, context):
                     grid.operator("maximize." + op, text="Bevel", translate=False)
                 else:
                     grid.operator("maximize." + op)
+            row = box.row(align=True)
+            row.operator("maximize.make_planar", text="Make Planar")
+            for axis in "XYZ":
+                row.operator("maximize.make_planar_axis", text=axis).axis = axis
+            box.prop(context.scene.tool_settings, "use_transform_correct_face_attributes", text="Preserve UVs")
+            _draw_poly_level(layout, context)
+
+
+# Max's per-level Edit rollout: (label, operator, text) in Max's order.
+_POLY_LEVEL_TOOLS = {
+    'VERTEX': ("Edit Vertices", ("remove", "break_vertex", "chamfer", "weld", "target_weld", "connect",
+                                 "remove_isolated")),
+    'EDGE': ("Edit Edges", ("remove", "split", "chamfer", "weld", "target_weld", "bridge", "connect",
+                            "create_shape", "turn", "hard", "smooth_edges")),
+    'BORDER': ("Edit Borders", ("cap", "bridge", "chamfer", "connect", "create_shape")),
+    'POLYGON': ("Edit Polygons", ("bevel_poly", "inset", "bridge", "flip", "turn", "select_by_angle",
+                                  "create_poly")),
+    'ELEMENT': ("Edit Elements", ("flip", "create_poly")),
+}
+
+
+def _draw_poly_level(layout, context):
+    from .selection import current_level
+    level = current_level(context)
+    if level not in _POLY_LEVEL_TOOLS:
+        return
+    label, ops = _POLY_LEVEL_TOOLS[level]
+    box = layout.box()
+    box.label(text=label)
+    grid = box.grid_flow(columns=2, even_columns=True, align=True)
+    for op in ops:
+        if op == "bevel_poly":
+            grid.operator("maximize." + op, text="Bevel", translate=False)
+        else:
+            grid.operator("maximize." + op)
+    overlay = getattr(context.space_data, "overlay", None)
+    if level == 'EDGE' and overlay is not None:
+        box.prop(overlay, "show_edge_sharp", text="Display Hard Edges")
+    if level in {'POLYGON', 'ELEMENT'}:
+        from .poly_tools import draw_material_ids
+        box = layout.box()
+        box.label(text="Material IDs")
+        draw_material_ids(box, context)
 
 
 def _draw_editable_spline(layout, context, obj):
