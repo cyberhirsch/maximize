@@ -8,7 +8,8 @@ import os
 
 import bpy
 import bpy.utils.previews
-from bpy.types import Menu, Panel
+from bpy.props import StringProperty
+from bpy.types import Menu, Operator, Panel
 
 from . import primitives, uvw_map
 from .nodes import draw_modifier_inputs
@@ -138,7 +139,154 @@ def _header_menu(self, context):
 
 
 # ------------------------------------------------------------------------------
-# Command panel (sidebar > Max)
+# Command panel: Moritz's Command Panel (Create and Modify tabs), or the sidebar > Max tab in Blender
+
+def has_command_panel():
+    """Moritz's Properties editor is Max's Command Panel, with a Create tab."""
+    return hasattr(bpy.types, "PROPERTIES_PT_create")
+
+
+class MAXIMIZE_OT_create_in_viewport(Operator):
+    """Create the object by dragging in the 3D Viewport, as from Max's Create panel"""
+    bl_idname = "maximize.create_in_viewport"
+    bl_label = "Create"
+    bl_options = {'INTERNAL'}
+
+    operator: StringProperty()
+    kind: StringProperty()
+
+    def invoke(self, context, _event):
+        # The drag creation runs in a 3D Viewport; the button sits in the Command Panel.
+        areas = [area for area in context.screen.areas if area.type == 'VIEW_3D']
+        if not areas:
+            return {'CANCELLED'}
+        area = max(areas, key=lambda area: area.width * area.height)
+        region = next(region for region in area.regions if region.type == 'WINDOW')
+        module, name = self.operator.split(".")
+        op = getattr(getattr(bpy.ops, module), name)
+        props = {"kind": self.kind} if self.kind else {}
+        with context.temp_override(area=area, region=region):
+            op('INVOKE_DEFAULT', **props)
+        return {'FINISHED'}
+
+
+def _create_button(layout, operator, text, icon, kind=""):
+    if has_command_panel():
+        op = layout.operator("maximize.create_in_viewport", text=text, icon=icon)
+        op.operator = operator
+        op.kind = kind
+    elif kind:
+        layout.operator(operator, text=text, icon=icon).kind = kind
+    else:
+        layout.operator(operator, text=text, icon=icon)
+
+
+def draw_object_types(layout, context, category):
+    """Moritz's Create tab hook: Max's parametric primitives and shapes."""
+    if category == 'GEOMETRY':
+        grid = layout.grid_flow(row_major=True, columns=2, even_columns=True, align=True)
+        grid.enabled = context.mode == 'OBJECT'
+        for ident, name, _desc, icon, _num in primitives.KINDS:
+            if ident not in primitives.SHAPES:
+                _create_button(grid, "maximize.add_primitive", name, icon, ident)
+        return True
+    if category == 'SHAPES':
+        grid = layout.grid_flow(row_major=True, columns=2, even_columns=True, align=True)
+        grid.enabled = context.mode == 'OBJECT'
+        _create_button(grid, "maximize.line", "Line", 'IPO_LINEAR')
+        for ident, name, _desc, icon, _num in primitives.SHAPE_KINDS:
+            _create_button(grid, "maximize.add_primitive", name, icon, ident)
+        return True
+    return False
+
+
+def draw_modify(layout, context):
+    """Max's Modify panel below the stack: parameters, UVW Map, Selection, Edit Geometry."""
+    obj = context.active_object
+    if obj is None:
+        layout.label(text="Nothing selected")
+        return
+    if not has_command_panel():
+        layout.prop(obj, "name", text="")
+    if primitives.is_parametric(obj):
+        box = layout.box()
+        box.label(text="Parameters")
+        primitives.draw_parameters(box, obj)
+        if primitives.is_shape(obj):
+            layout.operator("maximize.convert_spline", text="Convert to Editable Spline")
+        layout.operator("maximize.convert_poly", text="Convert to Editable Poly")
+    if obj.type == 'CURVE' and not primitives.is_shape(obj):
+        _draw_editable_spline(layout, context, obj)
+    mod = uvw_map.uvw_modifier(obj)
+    if mod is not None:
+        box = layout.box()
+        box.label(text="UVW Map")
+        draw_modifier_inputs(box, mod)
+    row = layout.row(align=True)
+    row.operator_menu_enum("object.modifier_add", "type", text="Modifier List")
+    row.menu("MAXIMIZE_MT_modify", text="", icon='DOWNARROW_HLT')
+    if context.mode == 'EDIT_MESH' or (obj.type == 'MESH' and primitives.primitive_modifier(obj) is None):
+        box = layout.box()
+        box.label(text="Selection")
+        row = box.row(align=True)
+        for level in ('VERTEX', 'EDGE', 'BORDER', 'POLYGON', 'ELEMENT'):
+            row.operator("maximize.subobject", text="", **level_icon(level)).level = level
+        if context.mode == 'EDIT_MESH':
+            grid = box.grid_flow(columns=2, even_columns=True, align=True)
+            for op in ("grow", "shrink", "loop", "ring"):
+                grid.operator("maximize." + op)
+            box = layout.box()
+            box.label(text="Edit Geometry")
+            grid = box.grid_flow(columns=2, even_columns=True, align=True)
+            grid.operator("mesh.extrude_context_move", text="Extrude")
+            for op in ("bevel_poly", "chamfer", "inset", "connect", "cut", "swift_loop", "weld",
+                       "target_weld", "collapse_sub", "bridge", "cap", "remove", "detach", "quickslice",
+                       "relax", "make_planar"):
+                if op == "bevel_poly":
+                    # The Max vocabulary renames Blender's Bevel to Chamfer: keep Max's Bevel.
+                    grid.operator("maximize." + op, text="Bevel", translate=False)
+                else:
+                    grid.operator("maximize." + op)
+
+
+def _draw_editable_spline(layout, context, obj):
+    """Max's Editable Spline rollouts: Rendering, Interpolation, Selection, Geometry."""
+    from . import spline_render
+    from .spline_tools import spline_level
+    box = layout.box()
+    box.label(text="Rendering")
+    spline_render.draw(box, obj)
+    box = layout.box()
+    box.label(text="Interpolation")
+    col = box.column(align=True)
+    col.prop(obj.data, "resolution_u", text="Steps")
+    if hasattr(obj.data, "use_optimize"):
+        col.prop(obj.data, "use_optimize", text="Optimize")
+    box = layout.box()
+    box.label(text="Selection")
+    row = box.row(align=True)
+    current = spline_level(context) if context.mode == 'EDIT_CURVE' else None
+    for level, label in (('VERTEX', "Vertex"), ('EDGE', "Segment"), ('BORDER', "Spline")):
+        row.operator("maximize.subobject", text=label,
+                     depress=current == {'VERTEX': 'VERTEX', 'EDGE': 'SEGMENT', 'BORDER': 'SPLINE'}[level]).level = level
+    if context.mode != 'EDIT_CURVE':
+        return
+    box = layout.box()
+    box.label(text="Geometry")
+    box.menu("MAXIMIZE_MT_spline_vertex_type")
+    grid = box.grid_flow(columns=2, even_columns=True, align=True)
+    for idname, text in (("maximize.spline_reset_tangents", "Reset Tangents"),
+                         ("maximize.spline_make_first", "Make First"), ("curve.switch_direction", "Reverse"),
+                         ("maximize.spline_weld", "Weld"), ("maximize.spline_fuse", "Fuse"),
+                         ("curve.make_segment", "Connect"), ("maximize.spline_break", "Break"),
+                         ("maximize.spline_divide", "Divide"), ("maximize.spline_detach", "Detach"),
+                         ("maximize.spline_close", "Close"), ("maximize.spline_mirror", "Mirror"),
+                         ("maximize.spline_explode", "Explode"), ("maximize.spline_fillet", "Fillet"),
+                         ("maximize.spline_chamfer", "Chamfer"), ("maximize.spline_outline", "Outline"),
+                         ("maximize.spline_trim", "Trim"), ("maximize.spline_extend", "Extend"),
+                         ("maximize.spline_level_delete", "Delete")):
+        grid.operator(idname, text=text)
+
 
 class MaxPanel:
     bl_space_type = 'VIEW_3D'
@@ -149,60 +297,43 @@ class MaxPanel:
 class MAXIMIZE_PT_create(MaxPanel, Panel):
     bl_label = "Create"
 
+    @classmethod
+    def poll(cls, _context):
+        # In Moritz this is the Command Panel's Create tab.
+        return not has_command_panel()
+
     def draw(self, context):
-        grid = self.layout.grid_flow(columns=2, even_columns=True, align=True)
-        grid.enabled = context.mode == 'OBJECT'
-        for ident, name, _desc, icon, _num in primitives.KINDS:
-            grid.operator("maximize.add_primitive", text=name, icon=icon).kind = ident
+        draw_object_types(self.layout, context, 'GEOMETRY')
+        self.layout.separator()
+        draw_object_types(self.layout, context, 'SHAPES')
 
 
 class MAXIMIZE_PT_modify(MaxPanel, Panel):
     bl_label = "Modify"
 
+    @classmethod
+    def poll(cls, _context):
+        # In Moritz this is in the Command Panel's Modify tab.
+        return not has_command_panel()
+
     def draw(self, context):
-        layout = self.layout
-        obj = context.active_object
-        if obj is None:
-            layout.label(text="Nothing selected")
-            return
-        layout.prop(obj, "name", text="")
-        if primitives.is_parametric(obj):
-            box = layout.box()
-            box.label(text="Parameters")
-            primitives.draw_parameters(box, obj)
-            if primitives.is_shape(obj):
-                layout.operator("maximize.convert_spline", text="Convert to Editable Spline")
-            layout.operator("maximize.convert_poly", text="Convert to Editable Poly")
-        mod = uvw_map.uvw_modifier(obj)
-        if mod is not None:
-            box = layout.box()
-            box.label(text="UVW Map")
-            draw_modifier_inputs(box, mod)
-        row = layout.row(align=True)
-        row.operator_menu_enum("object.modifier_add", "type", text="Modifier List")
-        row.menu("MAXIMIZE_MT_modify", text="", icon='DOWNARROW_HLT')
-        if context.mode == 'EDIT_MESH' or (obj.type == 'MESH' and primitives.primitive_modifier(obj) is None):
-            box = layout.box()
-            box.label(text="Selection")
-            row = box.row(align=True)
-            for level in ('VERTEX', 'EDGE', 'BORDER', 'POLYGON', 'ELEMENT'):
-                row.operator("maximize.subobject", text="", **level_icon(level)).level = level
-            if context.mode == 'EDIT_MESH':
-                grid = box.grid_flow(columns=2, even_columns=True, align=True)
-                for op in ("grow", "shrink", "loop", "ring"):
-                    grid.operator("maximize." + op)
-                box = layout.box()
-                box.label(text="Edit Geometry")
-                grid = box.grid_flow(columns=2, even_columns=True, align=True)
-                grid.operator("mesh.extrude_context_move", text="Extrude")
-                for op in ("bevel_poly", "chamfer", "inset", "connect", "cut", "swift_loop", "weld",
-                           "target_weld", "collapse_sub", "bridge", "cap", "remove", "detach", "quickslice",
-                           "relax", "make_planar"):
-                    if op == "bevel_poly":
-                        # The Max vocabulary renames Blender's Bevel to Chamfer: keep Max's Bevel.
-                        grid.operator("maximize." + op, text="Bevel", translate=False)
-                    else:
-                        grid.operator("maximize." + op)
+        draw_modify(self.layout, context)
+
+
+class MAXIMIZE_PT_command_modify(Panel):
+    """Moritz: Max's Modify rollouts in the Command Panel's Modify tab, below the stack"""
+    bl_space_type = 'PROPERTIES'
+    bl_region_type = 'WINDOW'
+    bl_context = "modifier"
+    bl_label = "Max"
+    bl_order = 1
+
+    @classmethod
+    def poll(cls, context):
+        return has_command_panel() and context.active_object is not None
+
+    def draw(self, context):
+        draw_modify(self.layout, context)
 
 
 class MAXIMIZE_PT_hierarchy(MaxPanel, Panel):
@@ -270,8 +401,10 @@ classes = (
     MAXIMIZE_MT_views,
     MAXIMIZE_MT_keymap,
     MAXIMIZE_MT_main,
+    MAXIMIZE_OT_create_in_viewport,
     MAXIMIZE_PT_create,
     MAXIMIZE_PT_modify,
+    MAXIMIZE_PT_command_modify,
     MAXIMIZE_PT_hierarchy,
     MAXIMIZE_PT_utilities,
     MAXIMIZE_PT_selection_sets,
@@ -300,10 +433,14 @@ def register():
     # Moritz only: Blender's header has no hook.
     if hasattr(bpy.types.VIEW3D_HT_header, "select_mode_draw"):
         bpy.types.VIEW3D_HT_header.select_mode_draw = draw_levels
+    if has_command_panel():
+        bpy.types.PROPERTIES_PT_create.object_type_draw = draw_object_types
 
 
 def unregister():
     global _icons
+    if has_command_panel() and bpy.types.PROPERTIES_PT_create.object_type_draw is draw_object_types:
+        bpy.types.PROPERTIES_PT_create.object_type_draw = None
     if getattr(bpy.types.VIEW3D_HT_header, "select_mode_draw", None) is draw_levels:
         bpy.types.VIEW3D_HT_header.select_mode_draw = None
     bpy.types.VIEW3D_MT_editor_menus.remove(_header_menu)

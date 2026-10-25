@@ -82,12 +82,27 @@ primitives.parameter(circle, "Radius").value = 2.0
 check("rebuild", abs(circle.data.splines[0].bezier_points[0].co.x - 2.0) < 1e-6)
 primitives.parameter(circle, "Steps").value = 3
 primitives.parameter(circle, "Thickness").value = 0.2
-check("interpolation", circle.data.resolution_u == 4 and abs(circle.data.bevel_depth - 0.1) < 1e-6,
-      circle.data.resolution_u, circle.data.bevel_depth)
+primitives.parameter(circle, "Enable In Viewport").value = True
+check("interpolation", circle.data.resolution_u == 4, circle.data.resolution_u)
 dg = ctx.evaluated_depsgraph_get()
 mesh = circle.evaluated_get(dg).to_mesh()
-check("thickness renders", len(mesh.polygons) > 0, len(mesh.polygons))
+xs = [v.co.x for v in mesh.vertices]
+check("rendering radial", len(mesh.polygons) > 0 and abs(max(xs) - 2.1) < 1e-3, len(mesh.polygons), round(max(xs), 4))
 circle.evaluated_get(dg).to_mesh_clear()
+shape = circle.data.maximize_shape
+shape.render_mode = 'RECTANGULAR'
+shape.rect_length, shape.rect_width = 0.6, 0.2
+shape.mapping = True
+dg = ctx.evaluated_depsgraph_get()
+mesh = circle.evaluated_get(dg).to_mesh()
+zs = [v.co.z for v in mesh.vertices]
+check("rendering rectangular", abs(max(zs) - 0.3) < 1e-4 and "UVMap" in mesh.uv_layers,
+      round(max(zs), 4), list(mesh.uv_layers.keys()))
+circle.evaluated_get(dg).to_mesh_clear()
+shape.render_viewport = False
+dg = ctx.evaluated_depsgraph_get()
+check("rendering off", circle.evaluated_get(dg).type == 'CURVE' and
+      not circle.modifiers["Rendering"].show_viewport)
 
 # Optimize (Moritz core): a rectangle's straight sides evaluate to their corners only.
 rect = primitives._create_object(ctx, 'RECTANGLE', Matrix())

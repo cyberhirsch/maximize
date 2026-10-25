@@ -9,9 +9,9 @@ A shape is a curve object made of real Bezier splines with the vertices and hand
 same shape (measured in 3ds Max 2026, see moritz/docs/splines_max_design.md in the Moritz repo).
 Its parameters live on the curve data and rebuild the splines when they change, so the shape
 stays editable until it is converted. Pressing 1 (Convert to Editable Spline) keeps the splines
-as they are. "Thickness" renders the shape as a round tube (Max's "Enable in Viewport /
-Renderer"). The splines are plain Blender data: stock Blender shows the shape, it only can't
-edit the parameters.
+as they are. The Rendering settings (Enable In Renderer / Viewport, cross section) are Max's,
+see `spline_render.py`. The splines are plain Blender data: stock Blender shows the shape, it
+only can't edit the parameters.
 """
 
 import math
@@ -242,7 +242,9 @@ def build_splines(p):
 
 def rebuild(curve):
     """Write the shape's splines and render settings into its curve data."""
+    from . import spline_render
     p = curve.maximize_shape
+    spline_render.sync(curve)
     if p.kind == 'NONE':
         return
     curve.splines.clear()
@@ -253,11 +255,6 @@ def rebuild(curve):
     if hasattr(curve, "use_optimize"):
         # Moritz core: straight segments get no Steps points. Stock Blender lacks it.
         curve.use_optimize = p.optimize
-    curve.bevel_mode = 'ROUND'
-    curve.bevel_depth = p.thickness / 2.0
-    # A round bevel has 4 + 2 * resolution sides.
-    curve.bevel_resolution = max(0, round((p.thickness_sides - 4) / 2))
-    curve.use_fill_caps = True
     for cyclic, knots in build_splines(p):
         spline = curve.splines.new('BEZIER')
         spline.bezier_points.add(len(knots) - 1)
@@ -317,9 +314,25 @@ class MaximizeShape(PropertyGroup):
                        description="Points drawn between two vertices")
     optimize: BoolProperty(name="Optimize", default=True, update=_update,
                            description="Straight segments get no Steps points")
-    thickness: _length("Thickness", 0.0, "Render the shape as a round tube this thick")
-    thickness_sides: IntProperty(name="Sides", default=12, min=4, max=100, update=_update,
-                                 description="Sides of the tube")
+    # Rendering (spline_render.py); kept after Convert to Editable Spline.
+    render_renderer: BoolProperty(name="Enable In Renderer", update=_update,
+                                  description="Render the spline as a mesh with the cross section below")
+    render_viewport: BoolProperty(name="Enable In Viewport", update=_update,
+                                  description="Show the spline as that mesh in the viewport")
+    render_mode: EnumProperty(name="Cross Section", default='RADIAL', update=_update, items=(
+        ('RADIAL', "Radial", "Round cross section"), ('RECTANGULAR', "Rectangular", "Rectangular cross section")))
+    thickness: _length("Thickness", 0.01, "Diameter of the round cross section")
+    thickness_sides: IntProperty(name="Sides", default=12, min=3, max=100, update=_update,
+                                 description="Sides of the round cross section")
+    render_angle: _angle("Angle", 0.0)
+    rect_length: _length("Length", 0.06, "Height of the rectangular cross section")
+    rect_width: _length("Width", 0.02, "Width of the rectangular cross section")
+    rect_angle: _angle("Angle", 0.0)
+    auto_smooth: BoolProperty(name="Auto Smooth", default=True, update=_update,
+                              description="Smooth the mesh, keeping edges sharper than the threshold")
+    smooth_threshold: _angle("Threshold", 40.0)
+    mapping: BoolProperty(name="Generate Mapping Coords", update=_update,
+                          description="UVs: U along the spline (in length), V around the cross section")
 
 
 # Parameters per shape, in Max's order: (UI label, property).
@@ -337,7 +350,8 @@ PARAMETERS = {
               ("Bias", "bias"), ("Direction", "direction")),
     'DONUT': (("Radius 1", "radius1"), ("Radius 2", "radius2")),
 }
-COMMON = (("Steps", "steps"), ("Optimize", "optimize"), ("Thickness", "thickness"),
+COMMON = (("Steps", "steps"), ("Optimize", "optimize"), ("Enable In Renderer", "render_renderer"),
+          ("Enable In Viewport", "render_viewport"), ("Thickness", "thickness"),
           ("Thickness Sides", "thickness_sides"))
 # Max's defaults per shape where they differ from the property defaults.
 DEFAULTS = {
@@ -392,9 +406,8 @@ def draw_shape_parameters(layout, obj):
     if hasattr(obj.data, "use_optimize"):
         col.prop(shape, "optimize")
     layout.label(text="Rendering")
-    col = layout.column(align=True)
-    col.prop(shape, "thickness")
-    col.prop(shape, "thickness_sides")
+    from . import spline_render
+    spline_render.draw(layout, obj)
 
 
 def create_shape(context, kind, name):

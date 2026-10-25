@@ -33,16 +33,17 @@ for o in list(bpy.data.objects):
     bpy.data.objects.remove(o)
 ctx = bpy.context
 
-# Every shape is a Bezier curve; with Thickness it renders as a tube.
+# Every shape is a Bezier curve; Enable In Viewport renders it as a tube.
 for kind in sorted(shapes.SHAPES):
     obj = primitives._create_object(ctx, kind, Matrix())
     primitives.parameter(obj, "Thickness").value = 0.05
+    primitives.parameter(obj, "Enable In Viewport").value = True
     ev = evaluated(obj)
     polys = len(ev.to_mesh().polygons)
     ev.to_mesh_clear()
     check("shape " + kind, obj.type == 'CURVE' and all(s.type == 'BEZIER' for s in obj.data.splines) and polys > 0,
           obj.name, "faces with thickness", polys)
-    primitives.parameter(obj, "Thickness").value = 0.0
+    primitives.parameter(obj, "Enable In Viewport").value = False
 
 rect = bpy.data.objects["Rectangle001"]
 primitives.parameter(rect, "Length").value = 2.0
