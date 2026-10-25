@@ -131,12 +131,18 @@ def _tools_spline(_context):
              for ident, label in (('CORNER', "Corner"), ('SMOOTH', "Smooth"))]
     beziers = [("maximize.spline_vertex_type", label, {"type": ident})
                for ident, label in (('BEZIER', "Bezier"), ('BEZIER_CORNER', "Bez Corner"))]
+    levels = (('VERTEX', "Vert"), ('EDGE', "Seg"), ('BORDER', "Spline"), ('OBJECT', "Top"))
     return [
+        ("ops", [("maximize.subobject", label, {"level": level}) for level, label in levels]),
         ("ops", types),
         ("ops", beziers),
         ("op", "maximize.spline_reset_tangents", "Reset Tangents", {}, {}),
         ("op", "maximize.spline_make_first", "Make First", {}, {}),
         ("op", "curve.switch_direction", "Reverse", {}, {}),
+        ("ops", [("maximize.spline_weld", "Weld", {}), ("maximize.spline_fuse", "Fuse", {})]),
+        ("ops", [("maximize.spline_divide", "Divide", {}), ("maximize.spline_detach", "Detach", {})]),
+        ("ops", [("maximize.spline_close", "Close", {}), ("maximize.spline_explode", "Explode", {})]),
+        ("op", "maximize.spline_mirror", "Mirror", {}, {}),
         ("op", "maximize.spline_fillet", "Fillet", {}, {}),
         ("op", "maximize.spline_chamfer", "Chamfer", {}, {}),
         ("op", "maximize.spline_outline", "Outline", {}, {}),

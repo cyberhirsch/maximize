@@ -61,7 +61,13 @@ class MAXIMIZE_OT_subobject(Operator):
     def execute(self, context):
         from . import edit_poly
         if context.active_object.type == 'CURVE':
-            # Editable Spline: Blender's curve Edit Mode has no separate segment or spline level.
+            # Editable Spline: one Blender Edit Mode; 2 (Segment) and 3 (Spline) change what a
+            # click picks (spline_tools.MAXIMIZE_OT_spline_pick).
+            from .primitives import is_shape
+            if self.level != 'OBJECT' and is_shape(context.active_object):
+                from .shapes import to_editable_spline
+                to_editable_spline(context, context.active_object)
+                self.report({'INFO'}, "Converted to Editable Spline")
             stored = context.scene.get("maximize_level")
             leave = context.mode == 'EDIT_CURVE' and (self.level == 'OBJECT' or stored == self.level)
             bpy.ops.object.mode_set(mode='OBJECT' if leave else 'EDIT')

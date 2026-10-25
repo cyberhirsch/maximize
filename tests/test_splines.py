@@ -250,3 +250,45 @@ bpy.ops.curve.select_all(action='SELECT')
 r = bpy.ops.maximize.spline_vertex_type(type='BEZIER_CORNER')
 bpy.ops.object.mode_set(mode='OBJECT')
 check("vertex type operator", r == {'FINISHED'} and all(bp.handle_left_type == 'FREE' for bp in vt.data.splines[0].bezier_points), r)
+
+# Editable Spline levels: segment and spline tools (data level; the click picking needs a viewport).
+from maximize import spline_tools as st
+lv = primitives._create_object(ctx, 'RECTANGLE', Matrix())
+bpy.ops.maximize.convert_spline()
+st._deselect_all(lv.data)
+st.select_segment(lv.data, 0, 0)
+check("delete segment", st.delete_segments(lv.data) == 1 and len(lv.data.splines) == 1 and
+      not lv.data.splines[0].use_cyclic_u and len(lv.data.splines[0].bezier_points) == 4,
+      len(lv.data.splines), len(lv.data.splines[0].bezier_points))
+st.select_spline(lv.data, 0)
+check("close", st.close_splines(lv.data) == 1 and lv.data.splines[0].use_cyclic_u)
+check("delete spline", st.delete_splines(lv.data) == 1 and len(lv.data.splines) == 0)
+
+two = poly_curve("Two", [[(0, 0, 0), (1, 0, 0)], [(1.001, 0, 0), (2, 1, 0)]])
+for s in two.data.splines:
+    for bp in s.bezier_points:
+        bp.select_control_point = True
+welded = st.weld_vertices(two.data, 0.01)
+sp = two.data.splines
+check("weld", welded == 1 and len(sp) == 1 and len(sp[0].bezier_points) == 3 and
+      abs(sp[0].bezier_points[1].co.x - 1.0005) < 1e-6, welded, len(sp), [len(s.bezier_points) for s in sp])
+loop = poly_curve("Loop", [[(0, 0, 0), (1, 0, 0), (1, 1, 0), (0.001, 0, 0)]])
+for bp in loop.data.splines[0].bezier_points:
+    bp.select_control_point = True
+check("weld closes", st.weld_vertices(loop.data, 0.01) == 1 and loop.data.splines[0].use_cyclic_u and
+      len(loop.data.splines[0].bezier_points) == 3)
+fz = poly_curve("Fuse", [[(0, 0, 0), (2, 0, 0)], [(0, 2, 0), (2, 2, 0)]])
+for s in fz.data.splines:
+    s.bezier_points[0].select_control_point = True
+st.fuse_vertices(fz.data)
+check("fuse", all((s.bezier_points[0].co - Vector((0, 1, 0))).length < 1e-6 for s in fz.data.splines))
+
+ex = poly_curve("Ex", [[(0, 0, 0), (1, 0, 0)], [(0, 1, 0), (1, 1, 0)], [(0, 2, 0), (1, 2, 0)]])
+for o in ctx.selected_objects:
+    o.select_set(False)
+ex.select_set(True)
+ctx.view_layer.objects.active = ex
+bpy.ops.object.mode_set(mode='EDIT')
+bpy.ops.maximize.spline_explode()
+parts = [o for o in bpy.data.objects if o.name == "Ex" or o.name.startswith("Ex.")]
+check("explode", len(parts) == 3 and all(len(o.data.splines) == 1 for o in parts), [o.name for o in parts])

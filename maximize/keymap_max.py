@@ -175,6 +175,10 @@ def apply(km, moritz=False, maya_navigation=False):
     if "Curve" in km.items:
         for key, level in (('ONE', 'VERTEX'), ('TWO', 'EDGE'), ('THREE', 'BORDER'), ('SIX', 'OBJECT')):
             km.bind("Curve", "maximize.subobject", _event(key), {"level": level})
+        # Segment and Spline levels: a click picks a whole segment or spline; Delete works per level.
+        for mods, props in (({}, {}), ({"ctrl": True}, {"extend": True}), ({"alt": True}, {"deselect": True})):
+            km.append("Curve", "maximize.spline_pick", _event('LEFTMOUSE', 'CLICK', **mods), props)
+        km.bind("Curve", "maximize.spline_level_delete", _event('DEL'))
     # Border and Element have no Blender select mode: clicks there pick a whole border or element
     # (the operator passes the click through at the other levels).
     for mods, props in (({}, {}), ({"ctrl": True}, {"extend": True}), ({"alt": True}, {"deselect": True})):

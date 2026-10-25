@@ -988,6 +988,376 @@ class MAXIMIZE_OT_spline_make_first(_CurveDataOperator, Operator):
         return make_first(curve)
 
 
+# ------------------------------------------------------------------------------
+# Editable Spline levels: 1 Vertex, 2 Segment, 3 Spline
+#
+# Blender's curve Edit Mode selects control points only. At the Segment and Spline levels a click
+# selects the control points at both ends of a segment, or all of a spline, and the level tools
+# below act on segments (both ends selected) or whole splines.
+
+SPLINE_LEVELS = {'VERTEX': 'VERTEX', 'EDGE': 'SEGMENT', 'BORDER': 'SPLINE'}
+
+
+def spline_level(context):
+    """'VERTEX', 'SEGMENT' or 'SPLINE' (keys 1, 2, 3); stored like the poly levels."""
+    return SPLINE_LEVELS.get(context.scene.get("maximize_level"), 'VERTEX')
+
+
+def _select_point(bp, state):
+    bp.select_control_point = bp.select_left_handle = bp.select_right_handle = state
+
+
+def select_segment(curve, index, segment, state=True):
+    points = curve.splines[index].bezier_points
+    for i in (segment, (segment + 1) % len(points)):
+        _select_point(points[i], state)
+
+
+def select_spline(curve, index, state=True):
+    for bp in curve.splines[index].bezier_points:
+        _select_point(bp, state)
+
+
+def _deselect_all(curve):
+    for spline in curve.splines:
+        for bp in spline.bezier_points:
+            _select_point(bp, False)
+
+
+def selected_splines(curve):
+    """Indices of the splines with every vertex selected."""
+    return [i for i, s in enumerate(curve.splines)
+            if s.type == 'BEZIER' and all(bp.select_control_point for bp in s.bezier_points)]
+
+
+class MAXIMIZE_OT_spline_pick(_PickSpline, Operator):
+    """Click selection at the Segment and Spline levels: a whole segment or a whole spline (the
+    click passes through at the Vertex level)"""
+    bl_idname = "maximize.spline_pick"
+    bl_label = "Pick Segment / Spline"
+
+    extend: BoolProperty(name="Extend", description="Add to the selection")
+    deselect: BoolProperty(name="Deselect", description="Remove from the selection")
+
+    def invoke(self, context, event):
+        level = spline_level(context)
+        if level == 'VERTEX':
+            return {'PASS_THROUGH'}
+        hit = self._pick(context, event)
+        if hit is None:
+            if not (self.extend or self.deselect):
+                bpy.ops.curve.select_all(action='DESELECT')
+            return {'FINISHED'}
+        obj, index, u = hit
+
+        def pick(_objects):
+            curve = obj.data
+            if not (self.extend or self.deselect):
+                for other in _objects:
+                    _deselect_all(other.data)
+            if level == 'SPLINE':
+                select_spline(curve, index, not self.deselect)
+            else:
+                count = _segment_count(_read(curve.splines[index]), curve.splines[index].use_cyclic_u)
+                select_segment(curve, index, min(int(u), count - 1), not self.deselect)
+
+        _with_object_mode(context, pick)
+        context.area.tag_redraw()
+        return {'FINISHED'}
+
+
+def _segment_selected(points, i):
+    return points[i].select and points[(i + 1) % len(points)].select
+
+
+def delete_segments(curve):
+    """Delete the selected segments (both ends selected); the splines open or split there."""
+    count = 0
+    for spline in list(curve.splines):
+        if spline.type != 'BEZIER':
+            continue
+        points = _read(spline)
+        cyclic = spline.use_cyclic_u
+        n = _segment_count(points, cyclic)
+        cut = [i for i in range(n) if _segment_selected(points, i)]
+        if not cut:
+            continue
+        count += len(cut)
+        # Walk the spline from just after a cut, collecting runs of points joined by kept segments.
+        if cyclic:
+            start = (cut[0] + 1) % len(points)
+            order = [(start + k) % len(points) for k in range(len(points))]
+        else:
+            order = list(range(len(points)))
+        runs, run = [], [order[0]]
+        for a, b in zip(order, order[1:]):
+            if a in cut and (b == (a + 1) % len(points)):
+                runs.append(run)
+                run = [b]
+            else:
+                run.append(b)
+        runs.append(run)
+        for run in runs:
+            if len(run) > 1:
+                piece = [points[i] for i in run]
+                for p in piece:
+                    p.select = False
+                _write(curve, None, piece, cyclic=False).resolution_u = spline.resolution_u
+        curve.splines.remove(spline)
+    return count
+
+
+def delete_splines(curve):
+    doomed = selected_splines(curve)
+    for i in reversed(doomed):
+        curve.splines.remove(curve.splines[i])
+    return len(doomed)
+
+
+def close_splines(curve):
+    """Max's Close: the selected open splines become closed."""
+    count = 0
+    for i in selected_splines(curve) or [i for i, s in enumerate(curve.splines)
+                                         if any(bp.select_control_point for bp in s.bezier_points)]:
+        spline = curve.splines[i]
+        if not spline.use_cyclic_u and len(spline.bezier_points) > 1:
+            spline.use_cyclic_u = True
+            count += 1
+    return count
+
+
+def fuse_vertices(curve):
+    """Max's Fuse: move the selected vertices (handles along) to their average position."""
+    points = list(_selected_points(curve))
+    if len(points) < 2:
+        return 0
+    centre = sum((bp.co for bp in points), Vector()) / len(points)
+    for bp in points:
+        offset = centre - bp.co
+        left, right = bp.handle_left_type, bp.handle_right_type
+        bp.handle_left_type = bp.handle_right_type = 'FREE'
+        bp.handle_left = bp.handle_left + offset
+        bp.handle_right = bp.handle_right + offset
+        bp.co = centre
+        bp.handle_left_type, bp.handle_right_type = left, right
+    return len(points)
+
+
+def weld_vertices(curve, threshold):
+    """Max's Weld: selected end vertices closer than `threshold` become one vertex. Two ends of
+    one spline close it; ends of two splines join them into one spline."""
+    welded = 0
+    while True:
+        ends = []
+        for index, spline in enumerate(curve.splines):
+            pts = spline.bezier_points
+            if spline.type != 'BEZIER' or spline.use_cyclic_u or len(pts) < 1:
+                continue
+            for at_end in (False, True):
+                bp = pts[-1] if at_end else pts[0]
+                if bp.select_control_point:
+                    ends.append((index, at_end, bp.co.copy()))
+        pair = None
+        for a in range(len(ends)):
+            for b in range(a + 1, len(ends)):
+                if (ends[a][2] - ends[b][2]).length <= threshold and \
+                        (ends[a][0] != ends[b][0] or len(curve.splines[ends[a][0]].bezier_points) > 2):
+                    pair = (ends[a], ends[b])
+                    break
+            if pair:
+                break
+        if pair is None:
+            return welded
+        (ia, end_a, _), (ib, end_b, _) = pair
+        if ia == ib:
+            spline = curve.splines[ia]
+            points = _read(spline)
+            first, last = points[0], points[-1]
+            first.co = (first.co + last.co) / 2
+            first.left = last.left + (first.co - last.co)
+            first.left_type = 'FREE' if first.left_type == 'VECTOR' else first.left_type
+            _write(curve, spline, points[:-1], cyclic=True)
+        else:
+            sa, sb = curve.splines[ia], curve.splines[ib]
+            a, b = _read(sa), _read(sb)
+            if not end_a:
+                a = _reverse(a)
+            if end_b:
+                b = _reverse(b)
+            # a ends and b starts at the welded vertex.
+            joint = _Point((a[-1].co + b[0].co) / 2, a[-1].left, b[0].right, a[-1].left_type, b[0].right_type,
+                           a[-1].radius, a[-1].tilt, True)
+            joint.left += joint.co - a[-1].co
+            joint.right += joint.co - b[0].co
+            merged = a[:-1] + [joint] + b[1:]
+            resolution = sa.resolution_u
+            for spline in sorted((sa, sb), key=lambda s: -list(curve.splines).index(s)):
+                curve.splines.remove(spline)
+            _write(curve, None, merged, cyclic=False).resolution_u = resolution
+        welded += 1
+
+
+def mirror_splines(context, axis):
+    """Max's Mirror (spline level): flip each selected spline about its own centre."""
+    settings = context.scene.tool_settings
+    pivot = settings.transform_pivot_point
+    settings.transform_pivot_point = 'INDIVIDUAL_ORIGINS'
+    try:
+        constraint = (axis == 'X', axis == 'Y', False)
+        bpy.ops.transform.mirror(orient_type='LOCAL', constraint_axis=constraint)
+    finally:
+        settings.transform_pivot_point = pivot
+
+
+def explode_splines(context):
+    """Max's Explode: every spline of the edited curve becomes its own object."""
+    obj = context.edit_object
+    count = len(obj.data.splines)
+    bpy.ops.object.mode_set(mode='OBJECT')
+    base_name = obj.name
+    for i in range(count - 1, 0, -1):
+        data = obj.data.copy()
+        for j in range(len(data.splines) - 1, -1, -1):
+            if j != i:
+                data.splines.remove(data.splines[j])
+        new = obj.copy()
+        new.data = data
+        for coll in obj.users_collection:
+            coll.objects.link(new)
+        new.name = "{:s}.{:03d}".format(base_name, i)
+    for j in range(len(obj.data.splines) - 1, 0, -1):
+        obj.data.splines.remove(obj.data.splines[j])
+    return count
+
+
+class MAXIMIZE_OT_spline_level_delete(Operator):
+    """Delete at the current Editable Spline level: vertices, segments or whole splines (Delete)"""
+    bl_idname = "maximize.spline_level_delete"
+    bl_label = "Delete"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'EDIT_CURVE'
+
+    def execute(self, context):
+        level = spline_level(context)
+        if level == 'VERTEX':
+            return bpy.ops.curve.delete(type='VERT')
+        fn = delete_segments if level == 'SEGMENT' else delete_splines
+        count = _with_object_mode(context, lambda objects: sum(fn(o.data) for o in objects))
+        if not count:
+            self.report({'WARNING'}, "Nothing selected at the {:s} level".format(level.title()))
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+
+class MAXIMIZE_OT_spline_divide(Operator):
+    """Max's Divide: add vertices evenly in the selected segments"""
+    bl_idname = "maximize.spline_divide"
+    bl_label = "Divide"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    cuts: IntProperty(name="Divisions", default=1, min=1, max=100)
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'EDIT_CURVE'
+
+    def execute(self, context):
+        return bpy.ops.curve.subdivide(number_cuts=self.cuts)
+
+
+class MAXIMIZE_OT_spline_close(_CurveDataOperator, Operator):
+    """Max's Close: close the selected open splines"""
+    bl_idname = "maximize.spline_close"
+    bl_label = "Close"
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'EDIT_CURVE'
+
+    def apply(self, curve, only_selected):
+        return close_splines(curve)
+
+
+class MAXIMIZE_OT_spline_fuse(_CurveDataOperator, Operator):
+    """Max's Fuse: move the selected vertices to their average position (they stay separate)"""
+    bl_idname = "maximize.spline_fuse"
+    bl_label = "Fuse"
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'EDIT_CURVE'
+
+    def apply(self, curve, only_selected):
+        return fuse_vertices(curve)
+
+
+class MAXIMIZE_OT_spline_weld(_CurveDataOperator, Operator):
+    """Max's Weld: selected end vertices within the threshold become one vertex, joining or closing
+    their splines"""
+    bl_idname = "maximize.spline_weld"
+    bl_label = "Weld"
+
+    threshold: FloatProperty(name="Threshold", default=0.01, min=0.0, unit='LENGTH')
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'EDIT_CURVE'
+
+    def apply(self, curve, only_selected):
+        return weld_vertices(curve, self.threshold)
+
+
+class MAXIMIZE_OT_spline_mirror(Operator):
+    """Max's Mirror (spline level): flip each selected spline about its own centre"""
+    bl_idname = "maximize.spline_mirror"
+    bl_label = "Mirror"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    axis: EnumProperty(name="Axis", items=(('X', "Horizontal", ""), ('Y', "Vertical", "")))
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'EDIT_CURVE'
+
+    def execute(self, context):
+        mirror_splines(context, self.axis)
+        return {'FINISHED'}
+
+
+class MAXIMIZE_OT_spline_detach(Operator):
+    """Max's Detach: the selected segments or splines become a new shape object"""
+    bl_idname = "maximize.spline_detach"
+    bl_label = "Detach"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'EDIT_CURVE'
+
+    def execute(self, context):
+        return bpy.ops.curve.separate()
+
+
+class MAXIMIZE_OT_spline_explode(Operator):
+    """Max's Explode: every spline of the shape becomes its own object"""
+    bl_idname = "maximize.spline_explode"
+    bl_label = "Explode"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'EDIT_CURVE' and context.edit_object is not None and \
+            len(context.edit_object.data.splines) > 1
+
+    def execute(self, context):
+        count = explode_splines(context)
+        self.report({'INFO'}, "Exploded into {:d} objects".format(count))
+        return {'FINISHED'}
+
+
 class MAXIMIZE_MT_spline_vertex_type(bpy.types.Menu):
     bl_label = "Vertex Type"
     bl_idname = "MAXIMIZE_MT_spline_vertex_type"
@@ -1008,6 +1378,15 @@ class MAXIMIZE_MT_spline_tools(bpy.types.Menu):
             layout.operator("maximize.spline_reset_tangents")
             layout.operator("maximize.spline_make_first")
             layout.operator("curve.switch_direction", text="Reverse")
+            layout.separator()
+            layout.operator("maximize.spline_weld")
+            layout.operator("maximize.spline_fuse")
+            layout.operator("maximize.spline_divide")
+            layout.operator("maximize.spline_detach")
+            layout.operator("maximize.spline_close")
+            layout.operator("maximize.spline_mirror")
+            layout.operator("maximize.spline_explode")
+            layout.operator("maximize.spline_level_delete")
             layout.separator()
             layout.operator("maximize.spline_fillet")
             layout.operator("maximize.spline_chamfer")
@@ -1043,6 +1422,15 @@ classes = (
     MAXIMIZE_OT_spline_reset_tangents,
     MAXIMIZE_OT_spline_make_first,
     MAXIMIZE_MT_spline_vertex_type,
+    MAXIMIZE_OT_spline_pick,
+    MAXIMIZE_OT_spline_level_delete,
+    MAXIMIZE_OT_spline_divide,
+    MAXIMIZE_OT_spline_close,
+    MAXIMIZE_OT_spline_fuse,
+    MAXIMIZE_OT_spline_weld,
+    MAXIMIZE_OT_spline_mirror,
+    MAXIMIZE_OT_spline_detach,
+    MAXIMIZE_OT_spline_explode,
     MAXIMIZE_MT_spline_tools,
 )
 
