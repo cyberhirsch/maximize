@@ -242,19 +242,37 @@ def _begin_native_session(context, obj, mod, select_mode):
     """Moritz 5.3+: edit the modifier's result in Edit Mode on the object itself, no stand-in."""
     if not hasattr(mod, "session_begin") or obj.data.users > 1 or obj.data.shape_keys:
         return False
-    edited_ob, base = _native_stand_in(context, obj, mod)
-    edited = edited_ob.data
-    try:
-        ok = mod.session_begin(base, edited)
-    except RuntimeError:
-        ok = False
+    params = mod.bl_rna.functions["session_begin"].parameters
+    fast = not params["edited"].is_required
+    if fast:
+        # One stack evaluation: the core applies the stored edit to the input itself. Only when the
+        # input kept its vertex count; otherwise the edit is remapped to the nearest new vertices.
+        base = _evaluated_mesh(context, obj, mod, include=False)
+        known = obj.get(BASE_COUNTS, {}).get(mod.name, len(base.vertices))
+        if known != len(base.vertices) and mod.edit_mode != 'NONE':
+            bpy.data.meshes.remove(base)
+            fast = False
+    if fast:
+        edited_ob, edited = None, None
+        try:
+            ok = mod.session_begin(base)
+        except RuntimeError:
+            ok = False
+    else:
+        edited_ob, base = _native_stand_in(context, obj, mod)
+        edited = edited_ob.data
+        try:
+            ok = mod.session_begin(base, edited=edited)
+        except RuntimeError:
+            ok = False
     if ok:
         counts = dict(obj.get(BASE_COUNTS, {}))
         counts[mod.name] = len(base.vertices)
         obj[BASE_COUNTS] = counts
-    bpy.data.objects.remove(edited_ob, do_unlink=True)
+    if edited_ob is not None:
+        bpy.data.objects.remove(edited_ob, do_unlink=True)
     for mesh in (edited, base):
-        if mesh.users == 0:
+        if mesh is not None and mesh.users == 0:
             bpy.data.meshes.remove(mesh)
     if not ok:
         return False
