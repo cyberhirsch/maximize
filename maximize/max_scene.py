@@ -11,6 +11,9 @@ it in Max with Scripting > Run Script) saves a .mxscene file (JSON). This brings
 - the hierarchy and pivots (Max and Blender are both Z up, so transforms carry over as they are),
   scaled from Max's system unit to meters;
 - layers as collections, hidden and frozen state, wire colors as object colors;
+- shapes as Bezier splines with Max's knots and vertex types; Circle, Rectangle, Ellipse, Arc,
+  NGon, Star, Helix and Donut stay parametric (`shapes.py`), with interpolation and the Rendering
+  settings (`spline_render.py`);
 - cameras (field of view) and lights (as point, spot, area or sun with their color);
 - materials converted from V-Ray, Corona, Physical and Standard (`max_materials.py`).
 """
@@ -46,6 +49,108 @@ def _meters_per_unit(data):
         return 0.01 / float(per_cm)
     # Older files: Max's default system unit is the inch.
     return 0.0254
+
+
+# Max shape classes that Moritz builds parametrically: (kind, {Max parameter: (property, scale)}),
+# where a scale of 1 marks a length (times the unit scale) and 0 a plain value.
+_SHAPE_CLASSES = {
+    "circle": ('CIRCLE', {"radius": ("radius", 1)}),
+    "rectangle": ('RECTANGLE', {"length": ("length", 1), "width": ("width", 1), "cornerradius": ("corner_radius", 1)}),
+    "ellipse": ('ELLIPSE', {"length": ("length", 1), "width": ("width", 1)}),
+    "arc": ('ARC', {"radius": ("radius", 1), "from": ("angle_from", 'deg'), "to": ("angle_to", 'deg'),
+                    "pie": ("pie", 0), "reverse": ("reverse", 0)}),
+    "ngon": ('NGON', {"radius": ("radius", 1), "nsides": ("sides", 0), "cornerradius": ("corner_radius", 1),
+                      "circular": ("circular", 0), "scribe": ("scribe", 'scribe')}),
+    "star": ('STAR', {"radius1": ("radius1", 1), "radius2": ("radius2", 1), "points": ("points", 0),
+                      "distort": ("distortion", 'deg'), "fillet1": ("fillet1", 1), "fillet2": ("fillet2", 1)}),
+    "helix": ('HELIX', {"radius1": ("radius1", 1), "radius2": ("radius2", 1), "height": ("height", 1),
+                        "turns": ("turns", 0), "bias": ("bias", 0), "direction": ("direction", 'direction')}),
+    "donut": ('DONUT', {"radius1": ("radius1", 1), "radius2": ("radius2", 1)}),
+}
+# Max's own handles are kept so the shape is exactly Max's: its Smooth handles differ from
+# Blender's Auto ones, and a Corner vertex has no handles on a curved segment.
+_KNOT_TYPES = {"corner": 'FREE', "smooth": 'ALIGNED', "bezier": 'ALIGNED', "beziercorner": 'FREE'}
+
+
+def _shape_value(value, how, scale):
+    if how == 1:
+        return float(value) * scale
+    if how == 'deg':
+        return math.radians(float(value))
+    if how == 'scribe':
+        return 'CIRCUMSCRIBED' if int(value) == 1 else 'INSCRIBED'
+    if how == 'direction':
+        return 'CCW' if int(value) == 1 else 'CW'
+    return value
+
+
+def _shape(name, sd, cls, scale):
+    """A curve from an exported shape: parametric when Moritz knows the class, else its knots."""
+    from . import shapes
+    params = {k.lower(): v for k, v in sd.get("params", {}).items()}
+    data = bpy.data.curves.new(name, 'CURVE')
+    data.dimensions = '3D'
+    p = data.maximize_shape
+    known = _SHAPE_CLASSES.get(cls.lower())
+    if known is not None:
+        kind, table = known
+        for key, (prop, how) in table.items():
+            if key in params:
+                setattr(p, prop, _shape_value(params[key], how, scale))
+    else:
+        for spline_data in sd.get("splines", []):
+            knots = spline_data.get("knots", [])
+            if not knots:
+                continue
+            spline = data.splines.new('BEZIER')
+            spline.bezier_points.add(len(knots) - 1)
+            for bp, (co, left, right, ktype) in zip(spline.bezier_points, knots):
+                bp.handle_left_type = bp.handle_right_type = 'FREE'
+                bp.co = [c * scale for c in co]
+                bp.handle_left = [c * scale for c in left]
+                bp.handle_right = [c * scale for c in right]
+            cyclic = bool(spline_data.get("closed"))
+            spline.use_cyclic_u = cyclic
+            points = spline.bezier_points
+            n = len(points)
+            # Max's line segments ignore their handles: put them on the line, so the segment stays
+            # straight in Blender too. Those vertices keep Free handles.
+            straight = set()
+            for i, seg in enumerate(spline_data.get("segments", [])):
+                if seg.lower().lstrip("#") == "line" and (cyclic or i + 1 < n):
+                    a, b = points[i], points[(i + 1) % n]
+                    a.handle_right = a.co.lerp(b.co, 1.0 / 3.0)
+                    b.handle_left = b.co.lerp(a.co, 1.0 / 3.0)
+                    straight.update((i, (i + 1) % n))
+            for i, (bp, knot) in enumerate(zip(points, knots)):
+                smooth = _KNOT_TYPES.get(knot[3].lower().lstrip("#"), 'FREE') == 'ALIGNED'
+                handles = ((bp.handle_left - bp.co).length, (bp.handle_right - bp.co).length)
+                if smooth and i not in straight and min(handles) > 1e-9:
+                    bp.handle_left_type = bp.handle_right_type = 'ALIGNED'
+    # Interpolation and Rendering, as Max names them.
+    if "steps" in params:
+        p.steps = int(params["steps"])
+    if "optimize" in params:
+        p.optimize = bool(params["optimize"])
+    render = {"render_renderable": ("render_renderer", 0), "render_displayrendermesh": ("render_viewport", 0),
+              "render_thickness": ("thickness", 1), "render_sides": ("thickness_sides", 0),
+              "render_angle": ("render_angle", 'deg'), "render_length": ("rect_length", 1),
+              "render_width": ("rect_width", 1), "render_angle2": ("rect_angle", 'deg'),
+              "render_auto_smooth": ("auto_smooth", 0), "render_threshold": ("smooth_threshold", 'deg'),
+              "render_mapcoords": ("mapping", 0)}
+    for key, (prop, how) in render.items():
+        if key in params:
+            setattr(p, prop, _shape_value(params[key], how, scale))
+    if "render_rectangular" in params:
+        p.render_mode = 'RECTANGULAR' if params["render_rectangular"] else 'RADIAL'
+    if known is not None:
+        p.kind = known[0]
+        shapes.rebuild(data)
+    else:
+        data.resolution_u = p.steps + 1
+        if hasattr(data, "use_optimize"):
+            data.use_optimize = p.optimize
+    return data
 
 
 def _mesh(name, md, scale, slot_of_id):
@@ -140,7 +245,7 @@ class _Importer:
         kind = nd.get("kind", "EMPTY")
         data = None
         mats = []
-        if kind == "MESH" and nd.get("mesh"):
+        if kind in {"MESH", "SHAPE"} and (nd.get("mesh") or nd.get("shape")):
             mats = self.material(nd.get("material", -1))
             ids = [i for i, _m in mats]
             if ids and ids[0] is not None:
@@ -156,7 +261,10 @@ class _Importer:
                 def slot_of_id(_mid):
                     return 0
                 mats = [m for _i, m in mats]
-            data = _mesh(name, nd["mesh"], self.scale, slot_of_id)
+            if kind == "SHAPE":
+                data = _shape(name, nd["shape"], nd.get("class", ""), self.scale)
+            else:
+                data = _mesh(name, nd["mesh"], self.scale, slot_of_id)
             for m in mats:
                 data.materials.append(m)
         elif kind == "CAMERA":
@@ -168,6 +276,9 @@ class _Importer:
             data = self._light(name, nd.get("light", {}), nd.get("class", ""))
         ob = bpy.data.objects.new(name, data)
         self.collection(nd.get("layer")).objects.link(ob)
+        if kind == "SHAPE" and data is not None:
+            from . import spline_render
+            spline_render.sync(data)
         ob.matrix_world = _matrix(nd["transform"], self.scale)
         wc = nd.get("wirecolor")
         if wc:

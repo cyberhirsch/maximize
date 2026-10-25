@@ -224,18 +224,49 @@
         out as string
     )
 
+    fn mxShape obj =
+    (
+        -- The shape as Bezier knots in the node's own space (position, in and out handles, knot
+        -- type), segment types, and its parameters (shape parameters, interpolation, rendering).
+        local s = copy obj
+        convertToSplineShape s
+        local inv = inverse s.transform
+        local out = stringStream ""
+        format "{\"splines\":[" to:out
+        for sp = 1 to (numSplines s) do
+        (
+            if sp > 1 then format "," to:out
+            format "{\"closed\":%,\"knots\":[" (if (isClosed s sp) then "true" else "false") to:out
+            for k = 1 to (numKnots s sp) do
+            (
+                if k > 1 then format "," to:out
+                local p = in coordsys world getKnotPoint s sp k
+                local i = in coordsys world getInVec s sp k
+                local o = in coordsys world getOutVec s sp k
+                format "[%,%,%,%]" (mxPoint3 (p * inv)) (mxPoint3 (i * inv)) (mxPoint3 (o * inv)) (mxStr ((getKnotType s sp k) as string)) to:out
+            )
+            format "],\"segments\":[" to:out
+            for g = 1 to (numSegments s sp) do
+            (
+                if g > 1 then format "," to:out
+                format "%" (mxStr ((getSegmentType s sp g) as string)) to:out
+            )
+            format "]}" to:out
+        )
+        format "]" to:out
+        delete s
+        format ",\"params\":%}" (mxParams obj 0) to:out
+        out as string
+    )
+
     fn mxKind obj =
     (
         case (superClassOf obj) of
         (
             camera: "CAMERA"
             light: "LIGHT"
-            shape:
-            (
-                local renderable = false
-                try (renderable = obj.render_renderable) catch ()
-                if renderable and (canConvertTo obj Editable_Poly) then "MESH" else "SHAPE"
-            )
+            -- Renderable shapes too: Moritz renders splines with Max's Rendering settings.
+            shape: (if (canConvertTo obj SplineShape) then "SHAPE" else "EMPTY")
             GeometryClass: (if (canConvertTo obj Editable_Poly) then "MESH" else "EMPTY")
             helper: "EMPTY"
             default: "EMPTY"
@@ -260,6 +291,11 @@
         (
             format ",\"material\":%" (mxMaterialId obj.material) to:out
             format ",\"mesh\":%" (mxMesh obj) to:out
+        )
+        if kind == "SHAPE" then
+        (
+            format ",\"material\":%" (mxMaterialId obj.material) to:out
+            format ",\"shape\":%" (mxShape obj) to:out
         )
         if kind == "CAMERA" then
         (
