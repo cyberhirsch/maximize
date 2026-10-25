@@ -1382,6 +1382,107 @@ def weld_vertices(curve, threshold):
         welded += 1
 
 
+def _ends(curve):
+    """(spline index, at_end, point) of every open Bezier spline end."""
+    for index, spline in enumerate(curve.splines):
+        pts = spline.bezier_points
+        if spline.type == 'BEZIER' and not spline.use_cyclic_u and len(pts):
+            yield index, False, pts[0]
+            if len(pts) > 1:
+                yield index, True, pts[-1]
+
+
+def auto_weld(curve, threshold):
+    """Max's End Point Auto-Welding: a selected (just moved) spline end that lands within
+    `threshold` of another end snaps onto it and the two become one vertex."""
+    ends = list(_ends(curve))
+    moved = [e for e in ends if e[2].select_control_point]
+    targets = [e for e in ends if not e[2].select_control_point]
+    snapped = 0
+    for index, at_end, bp in moved:
+        best = None
+        for t_index, t_end, t_bp in targets:
+            if t_index == index and len(curve.splines[index].bezier_points) < 3:
+                continue
+            distance = (t_bp.co - bp.co).length
+            if distance <= threshold and (best is None or distance < best[0]):
+                best = (distance, t_bp)
+        if best is None:
+            continue
+        target = best[1]
+        offset = target.co - bp.co
+        left, right = bp.handle_left_type, bp.handle_right_type
+        bp.handle_left_type = bp.handle_right_type = 'FREE'
+        bp.handle_left = bp.handle_left + offset
+        bp.handle_right = bp.handle_right + offset
+        bp.co = target.co
+        bp.handle_left_type, bp.handle_right_type = left, right
+        target.select_control_point = True
+        targets = [e for e in targets if e[2] != target]
+        snapped += 1
+    if not snapped:
+        return 0
+    return weld_vertices(curve, 1e-6)
+
+
+def _insert(points, cyclic, us):
+    """`points` with new knots at the spline parameters `us` (curved segments stay the same curve)."""
+    n = _segment_count(points, cyclic)
+    by_segment = {}
+    for u in sorted(us):
+        i = min(int(math.floor(u)), n - 1)
+        t = u - i
+        if 1e-6 < t < 1 - 1e-6:
+            by_segment.setdefault(i, []).append(t)
+    out = []
+    for i, p in enumerate(points):
+        out.append(p)
+        if i not in by_segment:
+            continue
+        c = _segment(points, i)
+        straight = _straight(c)
+        done = 0.0
+        for t in by_segment[i]:
+            head, c = _split(c, (t - done) / (1 - done))
+            out[-1].right = head[1]
+            kind = 'VECTOR' if straight else 'ALIGNED'
+            out.append(_Point(head[3], head[2], c[1], kind, kind, p.radius, p.tilt, True))
+            done = t
+        points[(i + 1) % len(points)].left = c[2]
+    return out
+
+
+def cross_insert(curve, threshold):
+    """Max's CrossInsert: a vertex on both splines wherever two splines cross within `threshold`
+    (seen from the shape's local Z); the splines stay separate."""
+    splines = [(_read(sp), sp.use_cyclic_u) for sp in curve.splines]
+    lines = [_polyline(pts, cyc) for pts, cyc in splines]
+    cuts = [[] for _ in splines]
+    for i in range(len(splines)):
+        for j in range(i + 1, len(splines)):
+            if curve.splines[i].type != 'BEZIER' or curve.splines[j].type != 'BEZIER':
+                continue
+            for k in range(len(lines[i]) - 1):
+                (u0, p), (u1, q) = lines[i][k], lines[i][k + 1]
+                for m in range(len(lines[j]) - 1):
+                    (v0, r), (v1, w) = lines[j][m], lines[j][m + 1]
+                    hit = _edge_hits(p, q, r, w)
+                    if hit is None or (p.lerp(q, hit[0]) - r.lerp(w, hit[1])).length > threshold:
+                        continue
+                    cuts[i].append(u0 + (u1 - u0) * hit[0])
+                    cuts[j].append(v0 + (v1 - v0) * hit[1])
+    old = list(curve.splines)
+    inserted = 0
+    for spline, (pts, cyc), us in zip(old, splines, cuts):
+        if not us:
+            continue
+        new = _insert(pts, cyc, us)
+        inserted += len(new) - len(pts)
+        if len(new) > len(pts):
+            _write(curve, spline, new)
+    return inserted
+
+
 def mirror_splines(context, axis):
     """Max's Mirror (spline level): flip each selected spline about its own centre."""
     settings = context.scene.tool_settings
@@ -1495,6 +1596,52 @@ class MAXIMIZE_OT_spline_weld(_CurveDataOperator, Operator):
         return weld_vertices(curve, self.threshold)
 
 
+class MAXIMIZE_OT_spline_cross_insert(_CurveDataOperator, Operator):
+    """Max's CrossInsert: add a vertex to both splines wherever two splines of the shape cross"""
+    bl_idname = "maximize.spline_cross_insert"
+    bl_label = "CrossInsert"
+
+    threshold: FloatProperty(name="Threshold", default=0.1, min=0.0, unit='LENGTH',
+                             description="How far apart the two splines may pass and still count as crossing")
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'EDIT_CURVE'
+
+    def apply(self, curve, only_selected):
+        return cross_insert(curve, self.threshold)
+
+
+# End Point Auto-Welding runs after each finished Move (key, gizmo or tool) in spline Edit Mode.
+_last_move = None
+
+
+def _auto_weld_watch():
+    global _last_move
+    wm = bpy.context.window_manager
+    ops = wm.operators if wm else ()
+    if not ops or ops[-1].bl_idname != "TRANSFORM_OT_translate":
+        return 0.2
+    op = ops[-1]
+    key = (op.as_pointer(), tuple(op.properties.value))
+    if key == _last_move:
+        return 0.2
+    _last_move = key
+    obj = bpy.context.view_layer.objects.active if bpy.context.view_layer else None
+    if obj is None or obj.type != 'CURVE' or obj.mode != 'EDIT' or not obj.data.maximize_shape.auto_weld:
+        return 0.2
+    window = wm.windows[0] if wm.windows else None
+    if window is None:
+        return 0.2
+    with bpy.context.temp_override(window=window):
+        count = _with_object_mode(bpy.context, lambda objects: sum(
+            auto_weld(o.data, o.data.maximize_shape.weld_threshold)
+            for o in objects if o.data.maximize_shape.auto_weld))
+        if count:
+            bpy.ops.ed.undo_push(message="Auto Weld")
+    return 0.2
+
+
 class MAXIMIZE_OT_spline_mirror(Operator):
     """Max's Mirror (spline level): flip each selected spline about its own centre"""
     bl_idname = "maximize.spline_mirror"
@@ -1566,6 +1713,7 @@ class MAXIMIZE_MT_spline_tools(bpy.types.Menu):
             layout.separator()
             layout.operator("maximize.spline_weld")
             layout.operator("maximize.spline_fuse")
+            layout.operator("maximize.spline_cross_insert")
             layout.operator("maximize.spline_divide")
             layout.operator("maximize.spline_detach")
             layout.operator("maximize.spline_close")
@@ -1616,6 +1764,7 @@ classes = (
     MAXIMIZE_OT_spline_close,
     MAXIMIZE_OT_spline_fuse,
     MAXIMIZE_OT_spline_weld,
+    MAXIMIZE_OT_spline_cross_insert,
     MAXIMIZE_OT_spline_mirror,
     MAXIMIZE_OT_spline_detach,
     MAXIMIZE_OT_spline_explode,
@@ -1628,9 +1777,13 @@ def register():
         bpy.utils.register_class(cls)
     bpy.types.VIEW3D_MT_edit_curve.append(_menu_curve)
     bpy.types.VIEW3D_MT_object.append(_menu_curve)
+    if not bpy.app.background:
+        bpy.app.timers.register(_auto_weld_watch, first_interval=1.0, persistent=True)
 
 
 def unregister():
+    if bpy.app.timers.is_registered(_auto_weld_watch):
+        bpy.app.timers.unregister(_auto_weld_watch)
     bpy.types.VIEW3D_MT_object.remove(_menu_curve)
     bpy.types.VIEW3D_MT_edit_curve.remove(_menu_curve)
     for cls in reversed(classes):

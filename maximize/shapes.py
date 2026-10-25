@@ -384,6 +384,18 @@ class MaximizeShape(PropertyGroup):
     smooth_threshold: _angle("Threshold", 40.0)
     mapping: BoolProperty(name="Generate Mapping Coords", update=_update,
                           description="UVs: U along the spline (in length), V around the cross section")
+    twist_correction: BoolProperty(name="Twist Correction", default=True, update=_update,
+                                   description="The cross section follows the spline with the least twist")
+    cap: BoolProperty(name="Cap", default=True, update=_update, description="Close the ends of open splines")
+    quad_cap: BoolProperty(name="Quad Cap", update=_update, description="Flat caps made of quad rings")
+    cap_segments: IntProperty(name="Segments", default=4, min=1, max=100, update=_update,
+                              description="Rings of a quad or sphere cap")
+    cap_sphere: BoolProperty(name="Sphere", update=_update, description="Round caps")
+    # Geometry: End Point Auto-Welding.
+    auto_weld: BoolProperty(name="Automatic Welding",
+                            description="A spline end moved within the threshold of another end welds to it")
+    weld_threshold: FloatProperty(name="Threshold Dist", default=0.15, min=0.0, unit='LENGTH',
+                                  description="How close an end must come to another to weld")
 
 
 # Parameters per shape, in Max's order: (UI label, property).

@@ -278,11 +278,18 @@ def _draw_editable_spline(layout, context, obj):
         return
     box = layout.box()
     box.label(text="Geometry")
+    p = obj.data.maximize_shape
+    row = box.row(align=True)
+    row.prop(p, "auto_weld")
+    sub = row.row(align=True)
+    sub.active = p.auto_weld
+    sub.prop(p, "weld_threshold", text="Threshold")
     box.menu("MAXIMIZE_MT_spline_vertex_type")
     grid = box.grid_flow(columns=2, even_columns=True, align=True)
     for idname, text in (("maximize.spline_reset_tangents", "Reset Tangents"),
                          ("maximize.spline_make_first", "Make First"), ("curve.switch_direction", "Reverse"),
                          ("maximize.spline_weld", "Weld"), ("maximize.spline_fuse", "Fuse"),
+                         ("maximize.spline_cross_insert", "CrossInsert"),
                          ("curve.make_segment", "Connect"), ("maximize.spline_break", "Break"),
                          ("maximize.spline_divide", "Divide"), ("maximize.spline_detach", "Detach"),
                          ("maximize.spline_close", "Close"), ("maximize.spline_mirror", "Mirror"),
