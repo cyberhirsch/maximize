@@ -3,14 +3,14 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 """Edit Poly tools Blender has under another shape: Material IDs (Set ID, Select ID with Clear
-Selection), Make Planar X / Y / Z and Create Shape (edges to a spline).
+Selection), Make Planar X / Y / Z, Create Shape (edges to a spline) and Outline.
 
 Max's material IDs are Blender's material slots, counted from 1. Nothing new is stored.
 """
 
 import bmesh
 import bpy
-from bpy.props import BoolProperty, EnumProperty, IntProperty
+from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty
 from bpy.types import Operator, Panel
 
 
@@ -139,6 +139,59 @@ class MAXIMIZE_OT_create_shape(_EditMesh, Operator):
         return {'FINISHED'}
 
 
+def outline(bm, amount):
+    """Max's Outline: move the outer edges of each selected polygon region outward (negative:
+    inward) in the polygons' plane, so the border edges stay parallel. Returns the moved count."""
+    selected = {f for f in bm.faces if f.select}
+    moves = {}
+    for face in selected:
+        for loop in face.loops:
+            edge = loop.edge
+            if sum(1 for f in edge.link_faces if f in selected) != 1:
+                continue
+            a, b = loop.vert, loop.link_loop_next.vert
+            # The loop runs counter-clockwise around the face normal: outward is to its right.
+            out = (b.co - a.co).cross(face.normal)
+            if out.length < 1e-12:
+                continue
+            out.normalize()
+            for v in (a, b):
+                moves.setdefault(v, []).append(out)
+    for v, dirs in moves.items():
+        # Unique edge directions; offsetting both edges by `amount` puts the corner on the bisector.
+        unique = []
+        for d in dirs:
+            if all((d - u).length > 1e-6 for u in unique):
+                unique.append(d)
+        total = sum(unique, unique[0] * 0)
+        if total.length < 1e-9:
+            continue
+        bisector = total.normalized()
+        cos = max(min(bisector.dot(unique[0]), 1.0), 0.2)
+        v.co += bisector * (amount / cos)
+    return len(moves)
+
+
+class MAXIMIZE_OT_outline(_EditMesh, Operator):
+    """Max's Outline: move the outer edges of the selected polygons in their plane, adding no geometry"""
+    bl_idname = "maximize.outline"
+    bl_label = "Outline"
+
+    amount: FloatProperty(name="Outline Amount", default=0.1, unit='LENGTH', step=1)
+
+    def execute(self, context):
+        count = 0
+        for obj in _edit_meshes(context):
+            bm = bmesh.from_edit_mesh(obj.data)
+            bm.normal_update()
+            count += outline(bm, self.amount)
+            bmesh.update_edit_mesh(obj.data)
+        if not count:
+            self.report({'WARNING'}, "Select polygons first")
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+
 class MAXIMIZE_PT_material_ids(Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
@@ -171,6 +224,7 @@ classes = (
     MAXIMIZE_OT_select_material_id,
     MAXIMIZE_OT_make_planar_axis,
     MAXIMIZE_OT_create_shape,
+    MAXIMIZE_OT_outline,
     MAXIMIZE_PT_material_ids,
 )
 
