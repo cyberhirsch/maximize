@@ -26,6 +26,11 @@ current input and Edited the current result. Then you edit Edited in place of th
 every Editable Spline tool. Leaving the level returns to the object.
 
 *Files:* a Geometry Nodes modifier plus two helper objects; stock Blender evaluates them as they are.
+
+**Native (Moritz builds with the `EDIT_SPLINE` modifier):** the edit lives in the modifier itself
+(see the Moritz source `MOD_edit_spline.cc`), with no helper objects. Editing still uses a
+stand-in object for the time of the edit; leaving stores the result with `modifier.store()`,
+mapping knots through the tilt as above. Stock Blender keeps the modifier, disabled.
 """
 
 import bpy
@@ -96,9 +101,18 @@ def build_group():
     return g.tree
 
 
+def native():
+    """True in Moritz builds that have the native Edit Spline modifier."""
+    return hasattr(bpy.types, "EditSplineModifier")
+
+
+def is_native(mod):
+    return mod is not None and mod.type == 'EDIT_SPLINE'
+
+
 def is_edit_spline(mod):
-    return mod is not None and mod.type == 'NODES' and mod.node_group is not None and \
-        mod.node_group.get("maximize_kind") == "edit_spline"
+    return is_native(mod) or (mod is not None and mod.type == 'NODES' and mod.node_group is not None and
+                              mod.node_group.get("maximize_kind") == "edit_spline")
 
 
 def active_edit_spline(obj):
@@ -189,14 +203,21 @@ def rebase(context, obj, mod):
 
 
 def add_edit_spline(context, obj):
-    mod = obj.modifiers.new("Edit Spline", 'NODES')
-    mod.node_group = build_group()
+    if native():
+        mod = obj.modifiers.new("Edit Spline", 'EDIT_SPLINE')
+    else:
+        mod = obj.modifiers.new("Edit Spline", 'NODES')
+        mod.node_group = build_group()
     # Below the Rendering modifier, which turns the splines into a mesh.
     from .spline_render import rendering_modifier
     render = rendering_modifier(obj)
     if render is not None:
         with context.temp_override(object=obj, active_object=obj):
             bpy.ops.object.modifier_move_to_index(modifier=mod.name, index=list(obj.modifiers).index(render))
+    if is_native(mod):
+        obj.modifiers.active = mod
+        obj.update_tag()
+        return mod
     base = _evaluated_curve(context, obj, mod, False, obj.name + " Edit Spline Base")
     edited = base.copy()
     edited.name = obj.name + " Edit Spline"
@@ -234,9 +255,103 @@ def _session(scene):
     return session.to_dict() if session is not None else None
 
 
+def _evaluated_curves(context, obj, upto, include):
+    """A Curves data-block copy of the object's splines evaluated up to modifier `upto`."""
+    index = list(obj.modifiers).index(upto)
+    saved = [(m, m.show_viewport) for m in obj.modifiers]
+    for i, m in enumerate(obj.modifiers):
+        if i > index or (i == index and not include):
+            m.show_viewport = False
+    try:
+        obj.update_tag()
+        depsgraph = context.evaluated_depsgraph_get()
+        depsgraph.update()
+        geometry = obj.evaluated_get(depsgraph).evaluated_geometry()
+        return copy_curves(geometry.curves, obj.name + " Edit Spline Input")
+    finally:
+        for m, show in saved:
+            m.show_viewport = show
+        obj.update_tag()
+
+
+_ATTR_KEYS = {"FLOAT_VECTOR": ("vector", 3), "FLOAT": ("value", 1), "INT": ("value", 1),
+              "INT8": ("value", 1), "BOOLEAN": ("value", 1), "FLOAT_COLOR": ("color", 4)}
+
+
+def copy_curves(src, name):
+    """A new Curves data-block with the points, curves and attributes of `src` (e.g. evaluated)."""
+    dst = bpy.data.hair_curves.new(name)
+    dst.add_curves([c.points_length for c in src.curves])
+    # Types first, through the API (it keeps Blender's type counts right), then the values.
+    types = src.attributes.get("curve_type")
+    kinds = {d.value for d in types.data} if types is not None else {0}
+    names = {0: 'CATMULL_ROM', 1: 'POLY', 2: 'BEZIER', 3: 'NURBS'}
+    if len(kinds) == 1:
+        dst.set_types(type=names.get(kinds.pop(), 'POLY'))
+    for attr in src.attributes:
+        if attr.name.startswith(".") or attr.data_type not in _ATTR_KEYS:
+            continue
+        if attr.name == "curve_type" and len(kinds) <= 1:
+            continue
+        key, width = _ATTR_KEYS[attr.data_type]
+        target = dst.attributes.get(attr.name) or dst.attributes.new(attr.name, attr.data_type, attr.domain)
+        values = [0] * (len(attr.data) * width)
+        attr.data.foreach_get(key, values)
+        target.data.foreach_set(key, values)
+    return dst
+
+
+def _begin_native(context, obj, mod):
+    """The stand-in for a native modifier: its current result, knots tagged with their input index."""
+    from .shapes import curve_from_geometry
+    input_curves = _evaluated_curves(context, obj, mod, False)
+    output = _evaluated_curves(context, obj, mod, True)
+    data = curve_from_geometry(output, obj.name + " Edit Spline")
+    data.resolution_u = obj.data.resolution_u
+    changed = output.attributes.get(CHANGED)
+    if changed is not None and len(changed.data) and changed.data[0].value:
+        # The knots below changed since the last edit: each knot follows the nearest new one.
+        base = curve_from_geometry(input_curves, obj.name + " Edit Spline Base")
+        _remap_nearest(data, base)
+        bpy.data.curves.remove(base)
+    else:
+        orig = output.attributes.get("mx_orig")
+        _set_ids(data, [d.value for d in orig.data] if orig is not None else None)
+    bpy.data.hair_curves.remove(output)
+    return _helper_object(obj.name + " Edit Spline", data), input_curves.name
+
+
+def _end_native(obj, mod, edited_ob, input_name):
+    """Store the stand-in's splines in the native modifier."""
+    input_curves = bpy.data.hair_curves.get(input_name)
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    depsgraph.update()
+    # Keep the geometry set alive while its curves are read.
+    geometry = edited_ob.evaluated_get(depsgraph).evaluated_geometry()
+    edited = copy_curves(geometry.curves, obj.name + " Edit Spline Edited")
+    tilt = edited.attributes.get("tilt")
+    ids = [d.value for d in tilt.data] if tilt is not None else []
+    mapped = [int(round(t)) if abs(t - round(t)) < 1e-3 and t >= 0 else -1 for t in ids]
+    edited.attributes.new("mx_orig", 'INT', 'POINT').data.foreach_set("value", mapped)
+    # The tilt carried the knot index: give the knots the input's tilt back.
+    in_tilt = input_curves.attributes.get("tilt") if input_curves else None
+    if tilt is not None:
+        tilt.data.foreach_set("value", [
+            in_tilt.data[m].value if in_tilt is not None and 0 <= m < len(in_tilt.data) else 0.0
+            for m in mapped])
+    if input_curves is not None:
+        mod.store(input=input_curves, edited=edited)
+        bpy.data.hair_curves.remove(input_curves)
+    bpy.data.hair_curves.remove(edited)
+
+
 def begin_edit(context, obj, mod, level):
-    rebase(context, obj, mod)
-    _base_ob, edited_ob = _helpers(mod)
+    if is_native(mod):
+        edited_ob, input_name = _begin_native(context, obj, mod)
+    else:
+        rebase(context, obj, mod)
+        _base_ob, edited_ob = _helpers(mod)
+        input_name = ""
     for o in context.selected_objects:
         o.select_set(False)
     context.scene.collection.objects.link(edited_ob)
@@ -245,7 +360,8 @@ def begin_edit(context, obj, mod, level):
     edited_ob.hide_set(False)
     edited_ob.select_set(True)
     context.view_layer.objects.active = edited_ob
-    context.scene[SESSION] = {"object": obj.name, "modifier": mod.name, "edited": edited_ob.name}
+    context.scene[SESSION] = {"object": obj.name, "modifier": mod.name, "edited": edited_ob.name,
+                              "input": input_name}
     bpy.ops.object.mode_set(mode='EDIT')
     context.scene["maximize_level"] = level
 
@@ -262,8 +378,18 @@ def end_edit(context):
     if edited_ob is not None:
         if edited_ob.mode == 'EDIT' and context.view_layer.objects.active == edited_ob:
             bpy.ops.object.mode_set(mode='OBJECT')
+    mod = obj.modifiers.get(session["modifier"]) if obj is not None else None
+    if is_native(mod) and edited_ob is not None:
+        # Store while the stand-in is still in the scene (it is evaluated for its splines).
+        _end_native(obj, mod, edited_ob, session.get("input", ""))
+    if edited_ob is not None:
         for coll in list(edited_ob.users_collection):
             coll.objects.unlink(edited_ob)
+    if is_native(mod) and edited_ob is not None:
+        data = edited_ob.data
+        bpy.data.objects.remove(edited_ob)
+        if data is not None and data.users == 0:
+            bpy.data.curves.remove(data)
     if obj is not None:
         obj.hide_set(False)
         obj.select_set(True)
@@ -325,6 +451,13 @@ def draw(layout, context, obj):
         layout.operator("maximize.edit_spline_add", icon='MODIFIER')
         return
     layout.label(text="1, 2, 3 edit at this level", icon='INFO')
+    if is_native(mod):
+        col = layout.column(align=True)
+        col.label(text="Interpolation")
+        col.prop(mod, "steps")
+        col.prop(mod, "use_optimize")
+        col.prop(mod, "use_adaptive")
+        return
     if topology_changed(context, obj):
         layout.label(text="Knot count below changed: edits kept as they were", icon='ERROR')
 
