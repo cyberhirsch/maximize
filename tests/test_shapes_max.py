@@ -89,6 +89,22 @@ mesh = circle.evaluated_get(dg).to_mesh()
 check("thickness renders", len(mesh.polygons) > 0, len(mesh.polygons))
 circle.evaluated_get(dg).to_mesh_clear()
 
+# Optimize (Moritz core): a rectangle's straight sides evaluate to their corners only.
+rect = primitives._create_object(ctx, 'RECTANGLE', Matrix())
+if hasattr(rect.data, "use_optimize"):
+    def evaluated_points(obj):
+        ev = obj.evaluated_get(ctx.evaluated_depsgraph_get())
+        mesh = ev.to_mesh()
+        n = len(mesh.vertices)
+        ev.to_mesh_clear()
+        return n
+    optimized = evaluated_points(rect)
+    primitives.parameter(rect, "Optimize").value = False
+    plain = evaluated_points(rect)
+    check("optimize", optimized == 4 and plain == 4 * 7, optimized, plain)
+else:
+    say("SKIP optimize (needs a Moritz build with Curve.use_optimize)")
+
 # Convert to Editable Spline keeps the object and its splines, and drops the parameters.
 before = [tuple(bp.co) for bp in circle.data.splines[0].bezier_points]
 for o in ctx.selected_objects:

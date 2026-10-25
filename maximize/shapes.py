@@ -250,6 +250,9 @@ def rebuild(curve):
     # Max's Steps are the points between two vertices; Blender's resolution counts the segments.
     curve.resolution_u = p.steps + 1
     curve.render_resolution_u = 0
+    if hasattr(curve, "use_optimize"):
+        # Moritz core: straight segments get no Steps points. Stock Blender lacks it.
+        curve.use_optimize = p.optimize
     curve.bevel_mode = 'ROUND'
     curve.bevel_depth = p.thickness / 2.0
     # A round bevel has 4 + 2 * resolution sides.
@@ -312,6 +315,8 @@ class MaximizeShape(PropertyGroup):
         ('CW', "CW", "Clockwise seen from above"), ('CCW', "CCW", "Counter-clockwise seen from above")))
     steps: IntProperty(name="Steps", default=6, min=0, max=100, update=_update,
                        description="Points drawn between two vertices")
+    optimize: BoolProperty(name="Optimize", default=True, update=_update,
+                           description="Straight segments get no Steps points")
     thickness: _length("Thickness", 0.0, "Render the shape as a round tube this thick")
     thickness_sides: IntProperty(name="Sides", default=12, min=4, max=100, update=_update,
                                  description="Sides of the tube")
@@ -332,7 +337,8 @@ PARAMETERS = {
               ("Bias", "bias"), ("Direction", "direction")),
     'DONUT': (("Radius 1", "radius1"), ("Radius 2", "radius2")),
 }
-COMMON = (("Steps", "steps"), ("Thickness", "thickness"), ("Thickness Sides", "thickness_sides"))
+COMMON = (("Steps", "steps"), ("Optimize", "optimize"), ("Thickness", "thickness"),
+          ("Thickness Sides", "thickness_sides"))
 # Max's defaults per shape where they differ from the property defaults.
 DEFAULTS = {
     'ELLIPSE': {"width": 0.6},
@@ -381,7 +387,10 @@ def draw_shape_parameters(layout, obj):
         else:
             col.prop(shape, prop, text=label)
     layout.label(text="Interpolation")
-    layout.prop(shape, "steps")
+    col = layout.column(align=True)
+    col.prop(shape, "steps")
+    if hasattr(obj.data, "use_optimize"):
+        col.prop(shape, "optimize")
     layout.label(text="Rendering")
     col = layout.column(align=True)
     col.prop(shape, "thickness")
