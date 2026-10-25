@@ -13,7 +13,6 @@ import bpy
 from mathutils import Matrix
 
 from maximize import primitives, shapes
-from maximize.nodes import modifier_input
 
 
 def say(*a): print("MXSP", " ".join(str(x) for x in a), flush=True)
@@ -34,20 +33,20 @@ for o in list(bpy.data.objects):
     bpy.data.objects.remove(o)
 ctx = bpy.context
 
-# Every shape evaluates to a curve; with Thickness it becomes a mesh.
+# Every shape is a Bezier curve; with Thickness it renders as a tube.
 for kind in sorted(shapes.SHAPES):
     obj = primitives._create_object(ctx, kind, Matrix())
+    primitives.parameter(obj, "Thickness").value = 0.05
     ev = evaluated(obj)
-    curves = ev.evaluated_geometry().curves if hasattr(ev, "evaluated_geometry") else None
-    mod = obj.modifiers[primitives.MODIFIER_NAME]
-    modifier_input(mod, "Thickness").value = 0.05
-    polys = len(evaluated(obj).data.polygons)
-    check("shape " + kind, polys > 0, obj.name, "faces with thickness", polys)
-    modifier_input(mod, "Thickness").value = 0.0
+    polys = len(ev.to_mesh().polygons)
+    ev.to_mesh_clear()
+    check("shape " + kind, obj.type == 'CURVE' and all(s.type == 'BEZIER' for s in obj.data.splines) and polys > 0,
+          obj.name, "faces with thickness", polys)
+    primitives.parameter(obj, "Thickness").value = 0.0
 
 rect = bpy.data.objects["Rectangle001"]
-modifier_input(rect.modifiers[primitives.MODIFIER_NAME], "Length").value = 2.0
-modifier_input(rect.modifiers[primitives.MODIFIER_NAME], "Width").value = 2.0
+primitives.parameter(rect, "Length").value = 2.0
+primitives.parameter(rect, "Width").value = 2.0
 for o in ctx.selected_objects:
     o.select_set(False)
 rect.select_set(True)
@@ -89,7 +88,7 @@ bpy.ops.object.mode_set(mode='OBJECT')
 # Loft: a circle along a helix.
 helix = primitives._create_object(ctx, 'HELIX', Matrix())
 circle = primitives._create_object(ctx, 'CIRCLE', Matrix())
-modifier_input(circle.modifiers[primitives.MODIFIER_NAME], "Radius").value = 0.1
+primitives.parameter(circle, "Radius").value = 0.1
 for o in ctx.selected_objects:
     o.select_set(False)
 circle.select_set(True)

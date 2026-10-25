@@ -6,7 +6,8 @@
 
 Each primitive is an object whose geometry comes from a "Parameters" Geometry Nodes modifier, so
 its size and segments stay editable until it is collapsed (Convert to Editable Poly). Box, Cylinder,
-Cone and Tube have their pivot at the base, as in Max.
+Cone and Tube have their pivot at the base, as in Max. Shapes are curve objects with their
+parameters on the curve data (`shapes.py`); they are created the same way.
 """
 
 import bpy
@@ -17,7 +18,9 @@ from mathutils import Matrix, Vector
 from mathutils.geometry import intersect_line_plane
 
 from .nodes import GroupBuilder, draw_modifier_inputs, find_group, modifier_input
-from .shapes import SHAPE_BUILDERS, SHAPE_KINDS, SHAPE_STEPS, SHAPES
+from .shapes import (
+    SHAPE_KINDS, SHAPE_STEPS, SHAPES, create_shape, draw_shape_parameters, shape_input, shape_kind,
+)
 
 MODIFIER_NAME = "Parameters"
 
@@ -157,7 +160,6 @@ _BUILDERS = {
     'TUBE': _build_tube,
     'TORUS': _build_torus,
     'PLANE': _build_plane,
-    **SHAPE_BUILDERS,
 }
 
 
@@ -177,18 +179,27 @@ def ensure_group(kind):
 
 
 def primitive_modifier(obj):
-    """The Parameters modifier of an editable primitive, or None."""
+    """The Parameters modifier of an editable primitive, or None. Shapes saved by earlier versions
+    have one too."""
     if obj is None:
         return None
     mod = obj.modifiers.get(MODIFIER_NAME)
     if mod is not None and mod.type == 'NODES' and mod.node_group is not None and \
-            mod.node_group.get("maximize_kind") in _BUILDERS:
+            (mod.node_group.get("maximize_kind") in _BUILDERS or mod.node_group.get("maximize_kind") in SHAPES):
         return mod
     return None
 
 
+def is_parametric(obj):
+    """An editable primitive or shape whose parameters can still be changed."""
+    return primitive_modifier(obj) is not None or shape_kind(obj) is not None
+
+
 def draw_parameters(layout, obj):
-    """Draw the parameters of an editable primitive, like Max's Parameters rollout."""
+    """Draw the parameters of an editable primitive or shape, like Max's Parameters rollout."""
+    if shape_kind(obj) is not None:
+        draw_shape_parameters(layout, obj)
+        return True
     mod = primitive_modifier(obj)
     if mod is None:
         return False
@@ -224,11 +235,13 @@ _SIZE_INPUTS = ("Width", "Length", "Radius", "Radius 1")
 
 def _create_object(context, kind, matrix):
     name = _max_name(kind_label(kind))
-    obj = bpy.data.objects.new(name, bpy.data.meshes.new(name))
+    if kind in SHAPES:
+        obj = create_shape(context, kind, name)
+    else:
+        obj = bpy.data.objects.new(name, bpy.data.meshes.new(name))
+        obj.modifiers.new(MODIFIER_NAME, 'NODES').node_group = ensure_group(kind)
     context.collection.objects.link(obj)
     obj.matrix_world = matrix
-    mod = obj.modifiers.new(MODIFIER_NAME, 'NODES')
-    mod.node_group = ensure_group(kind)
     for other in context.selected_objects:
         other.select_set(False)
     obj.select_set(True)
@@ -236,9 +249,16 @@ def _create_object(context, kind, matrix):
     return obj
 
 
-def _has_input(mod, name):
+def parameter(obj, name):
+    """A parameter of an editable primitive or shape by its UI name; read and write its `value`."""
+    if shape_kind(obj) is not None:
+        return shape_input(obj, name)
+    return modifier_input(obj.modifiers[MODIFIER_NAME], name)
+
+
+def _has_input(obj, name):
     try:
-        modifier_input(mod, name)
+        parameter(obj, name)
     except KeyError:
         return False
     return True
@@ -318,7 +338,7 @@ class MAXIMIZE_OT_add_primitive(Operator):
         return intersect_line_plane(origin, origin + direction, Vector(), self._n)
 
     def _input(self, name):
-        return modifier_input(self._obj.modifiers[MODIFIER_NAME], name)
+        return parameter(self._obj, name)
 
     def _update(self, event):
         self._apply(event)
@@ -361,16 +381,14 @@ class MAXIMIZE_OT_add_primitive(Operator):
         basis = Matrix((self._u, self._v, self._n)).transposed().to_4x4()
         self._obj = _create_object(context, self.kind, Matrix.Translation(hit) @ basis)
         # Start the drag-sized inputs at zero so the object grows with the mouse.
-        mod = self._obj.modifiers[MODIFIER_NAME]
         for name in _SIZE_INPUTS + ("Height",):
-            if _has_input(mod, name):
+            if _has_input(self._obj, name):
                 self._input(name).value = 0.0
         self._step = 0
         return True
 
     def _next_step(self, event):
-        mod = self._obj.modifiers[MODIFIER_NAME]
-        if self._step == 0 and all(self._input(n).value < 1e-6 for n in _SIZE_INPUTS if _has_input(mod, n)):
+        if self._step == 0 and all(self._input(n).value < 1e-6 for n in _SIZE_INPUTS if _has_input(self._obj, n)):
             # A click without a drag creates nothing.
             bpy.data.objects.remove(self._obj)
             self._obj = None
@@ -443,8 +461,26 @@ class MAXIMIZE_MT_create_shapes(bpy.types.Menu):
 
 
 def is_shape(obj):
+    if shape_kind(obj) is not None:
+        return True
     mod = primitive_modifier(obj)
     return mod is not None and mod.node_group.get("maximize_kind") in SHAPES
+
+
+class MAXIMIZE_OT_convert_spline(Operator):
+    """Convert the shape to an editable spline: its splines stay, its parameters go"""
+    bl_idname = "maximize.convert_spline"
+    bl_label = "Convert to Editable Spline"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'OBJECT' and is_shape(context.active_object)
+
+    def execute(self, context):
+        from .shapes import to_editable_spline
+        to_editable_spline(context, context.active_object)
+        return {'FINISHED'}
 
 
 def _menu_add(self, _context):
@@ -457,6 +493,7 @@ classes = (
     MAXIMIZE_OT_add_primitive,
     MAXIMIZE_MT_create,
     MAXIMIZE_MT_create_shapes,
+    MAXIMIZE_OT_convert_spline,
 )
 
 

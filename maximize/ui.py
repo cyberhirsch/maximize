@@ -166,10 +166,12 @@ class MAXIMIZE_PT_modify(MaxPanel, Panel):
             layout.label(text="Nothing selected")
             return
         layout.prop(obj, "name", text="")
-        if primitives.primitive_modifier(obj) is not None:
+        if primitives.is_parametric(obj):
             box = layout.box()
             box.label(text="Parameters")
             primitives.draw_parameters(box, obj)
+            if primitives.is_shape(obj):
+                layout.operator("maximize.convert_spline", text="Convert to Editable Spline")
             layout.operator("maximize.convert_poly", text="Convert to Editable Poly")
         mod = uvw_map.uvw_modifier(obj)
         if mod is not None:
