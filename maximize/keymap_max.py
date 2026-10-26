@@ -354,6 +354,8 @@ def _editors(km):
     """Max keys in the other editors where nothing clashes: F2 renames (Scene Explorer, Slate),
     Ctrl+A/D/I select all/none/invert, K sets a key, Ctrl+Alt+Z frames all (Track View)."""
     km.bind("Outliner", "outliner.item_rename", _event('F2'))
+    # Scene Explorer: double-click selects an object and its children; rename stays on F2.
+    km.bind("Outliner", "maximize.outliner_select_children", _event('LEFTMOUSE', 'DOUBLE_CLICK'))
     for keymap, prefix in (("Graph Editor", "graph"), ("Dopesheet", "action"), ("Node Editor", "node")):
         if keymap not in km.items:
             continue

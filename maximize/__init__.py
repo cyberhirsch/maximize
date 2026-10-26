@@ -42,6 +42,7 @@ from . import (
     uvw_map,
     max_scene,
     quad_menu,
+    outliner,
     ui,
 )
 
@@ -66,6 +67,7 @@ _modules = (
     uvw_map,
     max_scene,
     quad_menu,
+    outliner,
     ui,
 )
 
