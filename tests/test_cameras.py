@@ -43,6 +43,9 @@ want = cam.data.lens * math.tan(pitch) / cam.data.sensor_width
 check("shift keeps framing", pitch > 0 and abs(cam.data.shift_y - want) < 1e-6, cam.data.shift_y)
 
 check("menu", hasattr(bpy.types, "MAXIMIZE_MT_point_of_view"))
+check("target found", cameras.camera_target(cam) == goal)
+check("navigation buttons", "bl_rna" in cameras.MAXIMIZE_GGT_camera_navigation.__dict__ and
+      hasattr(bpy.types, "MAXIMIZE_OT_camera_dolly"))
 bpy.ops.preferences.keyconfig_activate(filepath=bpy.utils.preset_find("Moritz", "keyconfig"))
 kc = ctx.window_manager.keyconfigs.active
 has_v = any(k.idname == "wm.call_menu" and k.type == 'V' and not k.ctrl and

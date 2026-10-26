@@ -15,7 +15,7 @@ import math
 
 import bpy
 from bpy.props import EnumProperty, StringProperty
-from bpy.types import Menu, Operator
+from bpy.types import GizmoGroup, Menu, Operator
 from bpy_extras import view3d_utils
 from mathutils import Vector
 from mathutils.geometry import intersect_line_plane
@@ -249,6 +249,106 @@ class MAXIMIZE_OT_camera_fov(Operator):
         return {'RUNNING_MODAL'}
 
 
+def camera_target(cam):
+    con = next((c for c in cam.constraints if c.type in {'TRACK_TO', 'DAMPED_TRACK', 'LOCKED_TRACK'} and
+                c.target is not None), None) if cam is not None else None
+    return con.target if con is not None else None
+
+
+class MAXIMIZE_OT_camera_dolly(Operator):
+    """Max's Dolly Camera / Target / Both: drag up and down to move along the view direction"""
+    bl_idname = "maximize.camera_dolly"
+    bl_label = "Dolly"
+    bl_options = {'REGISTER', 'UNDO', 'GRAB_CURSOR', 'BLOCKING'}
+
+    mode: EnumProperty(name="Dolly", items=(('CAMERA', "Camera", ""), ('TARGET', "Target", ""),
+                                            ('BOTH', "Camera and Target", "")))
+
+    @classmethod
+    def poll(cls, context):
+        return _view_camera(context) is not None
+
+    def invoke(self, context, event):
+        cam = _view_camera(context)
+        self._moving = []
+        target = camera_target(cam)
+        if self.mode in {'CAMERA', 'BOTH'}:
+            self._moving.append(cam)
+        if self.mode in {'TARGET', 'BOTH'} and target is not None:
+            self._moving.append(target)
+        if not self._moving:
+            self.report({'WARNING'}, "The camera has no target")
+            return {'CANCELLED'}
+        self._start = [o.location.copy() for o in self._moving]
+        self._dir = (cam.matrix_world.to_3x3() @ Vector((0.0, 0.0, -1.0))).normalized()
+        self._y = event.mouse_y
+        context.window_manager.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
+
+    def modal(self, context, event):
+        if event.type == 'MOUSEMOVE':
+            step = (event.mouse_y - self._y) * 0.01 * max(1.0, context.scene.unit_settings.scale_length ** -1)
+            for obj, start in zip(self._moving, self._start):
+                obj.location = start + self._dir * step
+            return {'RUNNING_MODAL'}
+        if event.type in {'LEFTMOUSE', 'RET'} and event.value == 'RELEASE':
+            return {'FINISHED'}
+        if event.type in {'RIGHTMOUSE', 'ESC'} and event.value == 'PRESS':
+            for obj, start in zip(self._moving, self._start):
+                obj.location = start
+            return {'CANCELLED'}
+        return {'RUNNING_MODAL'}
+
+
+# Max's camera navigation buttons, bottom right of a camera view: (operator, props, icon).
+_CAMERA_BUTTONS = (
+    ("maximize.camera_dolly", {"mode": 'CAMERA'}, 'VIEW_ZOOM'),
+    ("maximize.camera_fov", {}, 'VIEW_PERSPECTIVE'),
+    ("view3d.move", {}, 'VIEW_PAN'),
+    ("view3d.rotate", {}, 'ORIENTATION_GIMBAL'),
+    ("view3d.view_roll", {"type": 'ANGLE'}, 'FILE_REFRESH'),
+)
+
+
+class MAXIMIZE_GGT_camera_navigation(GizmoGroup):
+    bl_idname = "MAXIMIZE_GGT_camera_navigation"
+    bl_label = "Camera Navigation"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'WINDOW'
+    bl_options = {'PERSISTENT', 'SCALE'}
+
+    @classmethod
+    def poll(cls, context):
+        return _view_camera(context) is not None and context.space_data.lock_camera
+
+    def setup(self, _context):
+        self.buttons = []
+        for idname, props, icon in _CAMERA_BUTTONS:
+            gz = self.gizmos.new("GIZMO_GT_button_2d")
+            gz.icon = icon
+            gz.draw_options = {'BACKDROP', 'OUTLINE'}
+            gz.color = (0.0, 0.0, 0.0)
+            gz.alpha = 0.4
+            gz.color_highlight = (0.8, 0.8, 0.8)
+            gz.alpha_highlight = 0.2
+            gz.scale_basis = 14.0
+            op = gz.target_set_operator(idname)
+            for key, value in props.items():
+                setattr(op, key, value)
+            self.buttons.append(gz)
+
+    def draw_prepare(self, context):
+        region = context.region
+        ui_scale = context.preferences.system.ui_scale
+        size = 32.0 * ui_scale
+        x = region.width - size * 0.75
+        y = size * 0.75
+        for gz in reversed(self.buttons):
+            gz.matrix_basis[0][3] = x
+            gz.matrix_basis[1][3] = y
+            x -= size
+
+
 class MAXIMIZE_MT_point_of_view(Menu):
     """Max's Point-of-View menu"""
     bl_idname = "MAXIMIZE_MT_point_of_view"
@@ -280,6 +380,7 @@ class MAXIMIZE_MT_point_of_view(Menu):
         layout.separator()
         layout.operator("maximize.target_camera", icon='CAMERA_DATA')
         layout.operator("maximize.camera_fov", icon='VIEW_PERSPECTIVE')
+        layout.operator_menu_enum("maximize.camera_dolly", "mode", text="Dolly", icon='VIEW_ZOOM')
         layout.operator("view3d.view_roll", text="Roll", icon='FILE_REFRESH').type = 'ANGLE'
         layout.operator("maximize.camera_tilt_correction")
 
@@ -303,6 +404,8 @@ classes = (
     MAXIMIZE_OT_camera_tilt_correction,
     MAXIMIZE_OT_target_camera,
     MAXIMIZE_OT_camera_fov,
+    MAXIMIZE_OT_camera_dolly,
+    MAXIMIZE_GGT_camera_navigation,
     MAXIMIZE_MT_point_of_view,
 )
 
