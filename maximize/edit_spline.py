@@ -231,6 +231,68 @@ def add_edit_spline(context, obj):
     return mod
 
 
+def convert_to_native(context, obj, mod):
+    """Replace a stage-0 (Geometry Nodes) Edit Spline with the native modifier, keeping the edit.
+    Returns the new modifier."""
+    input_curves = _evaluated_curves(context, obj, mod, False)
+    output = _evaluated_curves(context, obj, mod, True)
+    base_ob, edited_ob = _helpers(mod)
+    ids = [bp.tilt for bp in _knots(edited_ob.data)] if edited_ob and edited_ob.data else []
+    same = base_ob is not None and base_ob.data is not None and \
+        len(_knots(base_ob.data)) == len(input_curves.points) and len(ids) == len(output.points)
+    if same:
+        mapped = [int(round(t)) if abs(t - round(t)) < 1e-3 and t >= 0 else -1 for t in ids]
+    else:
+        # The knots below changed since the last edit: each knot follows the nearest input knot.
+        from mathutils.kdtree import KDTree
+        points = [d.vector for d in input_curves.attributes["position"].data]
+        tree = KDTree(len(points))
+        for i, co in enumerate(points):
+            tree.insert(co, i)
+        tree.balance()
+        mapped = [tree.find(d.vector)[1] if points else -1 for d in output.attributes["position"].data]
+    orig = output.attributes.get("mx_orig") or output.attributes.new("mx_orig", 'INT', 'POINT')
+    orig.data.foreach_set("value", mapped)
+    index = list(obj.modifiers).index(mod)
+    name = mod.name
+    native_mod = obj.modifiers.new(name + " (native)", 'EDIT_SPLINE')
+    with context.temp_override(object=obj, active_object=obj):
+        bpy.ops.object.modifier_move_to_index(modifier=native_mod.name, index=index)
+    native_mod.store(input=input_curves, edited=output)
+    bpy.data.hair_curves.remove(input_curves)
+    bpy.data.hair_curves.remove(output)
+    obj.modifiers.remove(mod)
+    native_mod.name = name
+    for helper in (base_ob, edited_ob):
+        if helper is not None and helper.get(TAG):
+            data = helper.data
+            bpy.data.objects.remove(helper)
+            if data is not None and data.users == 0:
+                bpy.data.curves.remove(data)
+    obj.modifiers.active = native_mod
+    obj.update_tag()
+    return native_mod
+
+
+class MAXIMIZE_OT_edit_spline_convert(Operator):
+    """Replace this Geometry Nodes Edit Spline with Moritz's native Edit Spline modifier, keeping
+    the edit. Stock Blender then shows the shape without the edit (it keeps the modifier, disabled)"""
+    bl_idname = "maximize.edit_spline_convert"
+    bl_label = "Convert to Native"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        mod = active_edit_spline(obj)
+        return native() and mod is not None and not is_native(mod) and context.mode == 'OBJECT'
+
+    def execute(self, context):
+        obj = context.active_object
+        convert_to_native(context, obj, active_edit_spline(obj))
+        return {'FINISHED'}
+
+
 class MAXIMIZE_OT_edit_spline_add(Operator):
     """Add an Edit Spline modifier: edit the shape's splines without converting it, so its
     parameters stay editable below"""
@@ -506,10 +568,13 @@ def draw(layout, context, obj):
         return
     if topology_changed(context, obj):
         layout.label(text="Knot count below changed: edits kept as they were", icon='ERROR')
+    if native():
+        layout.operator("maximize.edit_spline_convert", icon='MODIFIER')
 
 
 classes = (
     MAXIMIZE_OT_edit_spline_add,
+    MAXIMIZE_OT_edit_spline_convert,
     MAXIMIZE_OT_edit_spline_end,
 )
 
