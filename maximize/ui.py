@@ -208,6 +208,8 @@ def draw_modify(layout, context):
         return
     if not has_command_panel():
         layout.prop(obj, "name", text="")
+    from . import sculpt
+    sculpt.draw(layout, context, obj)
     if obj.get("maximize_section"):
         box = layout.box()
         box.label(text="Section Parameters")
