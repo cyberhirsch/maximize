@@ -310,6 +310,9 @@ def rebuild(curve):
                 bp.handle_left_type = bp.handle_right_type = handle_type
         spline.use_cyclic_u = cyclic
         spline.use_smooth = True
+    if p.adaptive:
+        from .spline_more import apply_adaptive
+        apply_adaptive(curve)
     curve.update_tag()
 
 
@@ -324,6 +327,39 @@ def _length(name, default, description=""):
 
 def _angle(name, default):
     return FloatProperty(name=name, default=math.radians(default), subtype='ANGLE', unit='ROTATION', update=_update)
+
+
+def _update_adaptive(self, context):
+    curve = self.id_data
+    _update(self, context)
+    if self.adaptive:
+        from .spline_more import apply_adaptive
+        apply_adaptive(curve)
+    else:
+        for spline in curve.splines:
+            spline.resolution_u = curve.resolution_u
+
+
+def _lock_aspect(self):
+    if self.rect_aspect_lock and self.rect_width > 0:
+        self.rect_locked_aspect = self.rect_length / self.rect_width
+
+
+_rect_guard = []
+
+
+def _update_rect(self, context, changed):
+    """Lock Aspect: Length and Width move together."""
+    if self.rect_aspect_lock and self.rect_locked_aspect > 0 and not _rect_guard:
+        _rect_guard.append(True)
+        try:
+            if changed == "rect_length":
+                self.rect_width = self.rect_length / self.rect_locked_aspect
+            else:
+                self.rect_length = self.rect_width * self.rect_locked_aspect
+        finally:
+            _rect_guard.clear()
+    _update(self, context)
 
 
 class MaximizeShape(PropertyGroup):
@@ -357,6 +393,13 @@ class MaximizeShape(PropertyGroup):
                        description="Points drawn between two vertices")
     optimize: BoolProperty(name="Optimize", default=True, update=_update,
                            description="Straight segments get no Steps points")
+    adaptive: BoolProperty(name="Adaptive", update=lambda self, ctx: _update_adaptive(self, ctx),
+                           description="Steps follow the curvature, about 6 degrees per step (Steps and "
+                                       "Optimize are ignored); one count per spline")
+    show_vertex_numbers: BoolProperty(name="Show Vertex Numbers", description="Number the vertices of each spline")
+    show_selected_segments: BoolProperty(name="Show Selected Segs", default=True,
+                                         description="Draw selected segments in red, as Max does")
+    vertex_numbers_selected: BoolProperty(name="Selected Only", description="Number only the selected vertices")
     # Egg: Max ties the length to the width (length = 1.5 width).
     egg_length: FloatProperty(name="Length", min=0.0, unit='LENGTH', update=_update,
                               get=lambda self: self.width * 1.5,
@@ -376,8 +419,30 @@ class MaximizeShape(PropertyGroup):
     thickness_sides: IntProperty(name="Sides", default=12, min=3, max=100, update=_update,
                                  description="Sides of the round cross section")
     render_angle: _angle("Angle", 0.0)
-    rect_length: _length("Length", 0.06, "Height of the rectangular cross section")
-    rect_width: _length("Width", 0.02, "Width of the rectangular cross section")
+    rect_length: FloatProperty(name="Length", default=0.06, min=0.0, unit='LENGTH',
+                               update=lambda self, ctx: _update_rect(self, ctx, "rect_length"),
+                               description="Height of the rectangular cross section")
+    rect_width: FloatProperty(name="Width", default=0.02, min=0.0, unit='LENGTH',
+                              update=lambda self, ctx: _update_rect(self, ctx, "rect_width"),
+                              description="Width of the rectangular cross section")
+    rect_aspect: FloatProperty(name="Aspect", min=0.0, description="Length divided by Width",
+                               get=lambda self: self.rect_length / self.rect_width if self.rect_width else 0.0,
+                               set=lambda self, value: setattr(self, "rect_width", self.rect_length / value)
+                               if value > 0 else None)
+    rect_aspect_lock: BoolProperty(name="Lock Aspect", update=lambda self, ctx: _lock_aspect(self),
+                                   description="Changing Length or Width keeps the aspect")
+    rect_locked_aspect: FloatProperty(options={'HIDDEN'})
+    # Use Viewport Settings: the viewport mesh can be thinner or coarser than the rendered one.
+    use_viewport_settings: BoolProperty(name="Use Viewport Settings", update=_update,
+                                        description="The viewport uses its own thickness and sides")
+    render_settings_target: EnumProperty(name="Settings", default='RENDERER', items=(
+        ('VIEWPORT', "Viewport", "Edit the viewport's settings"),
+        ('RENDERER', "Renderer", "Edit the renderer's settings")))
+    viewport_thickness: _length("Thickness", 0.01, "Diameter of the round cross section in the viewport")
+    viewport_sides: IntProperty(name="Sides", default=12, min=3, max=100, update=_update,
+                                description="Sides of the round cross section in the viewport")
+    viewport_rect_length: _length("Length", 0.06, "Height of the rectangular cross section in the viewport")
+    viewport_rect_width: _length("Width", 0.02, "Width of the rectangular cross section in the viewport")
     rect_angle: _angle("Angle", 0.0)
     auto_smooth: BoolProperty(name="Auto Smooth", default=True, update=_update,
                               description="Smooth the mesh, keeping edges sharper than the threshold")
@@ -471,6 +536,7 @@ def draw_shape_parameters(layout, obj):
     col.prop(shape, "steps")
     if hasattr(obj.data, "use_optimize"):
         col.prop(shape, "optimize")
+    col.prop(shape, "adaptive")
     layout.label(text="Rendering")
     from . import spline_render
     spline_render.draw(layout, obj)

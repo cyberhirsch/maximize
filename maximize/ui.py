@@ -319,6 +319,7 @@ def _draw_editable_spline(layout, context, obj):
     col.prop(obj.data, "resolution_u", text="Steps")
     if hasattr(obj.data, "use_optimize"):
         col.prop(obj.data, "use_optimize", text="Optimize")
+    col.prop(obj.data.maximize_shape, "adaptive")
     box = layout.box()
     box.label(text="Selection")
     row = box.row(align=True)
@@ -350,6 +351,8 @@ def _draw_editable_spline(layout, context, obj):
                          ("maximize.spline_trim", "Trim"), ("maximize.spline_extend", "Extend"),
                          ("maximize.spline_level_delete", "Delete")):
         grid.operator(idname, text=text)
+    from .spline_more import draw_geometry_extras
+    draw_geometry_extras(layout, context, obj)
 
 
 class MaxPanel:

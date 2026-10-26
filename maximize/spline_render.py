@@ -21,7 +21,7 @@ from .nodes import GroupBuilder, find_group, modifier_input
 
 MODIFIER_NAME = "Rendering"
 GROUP_NAME = "MX Renderable Spline"
-REVISION = 2
+REVISION = 3
 DIST = 'NodeSocketFloat'
 
 
@@ -42,6 +42,23 @@ def _build(b):
     quad_cap = b.input("Quad Cap", 'NodeSocketBool', False)
     cap_segments = b.input("Cap Segments", 'NodeSocketInt', 4, 1, 100)
     sphere = b.input("Sphere", 'NodeSocketBool', False)
+    # Use Viewport Settings: in the viewport, its own thickness, sides, length and width.
+    use_vp = b.input("Use Viewport Settings", 'NodeSocketBool', False)
+    vp_thickness = b.input("Viewport Thickness", DIST, 0.01, 0.0, subtype='DISTANCE')
+    vp_sides = b.input("Viewport Sides", 'NodeSocketInt', 12, 3, 100)
+    vp_length = b.input("Viewport Length", DIST, 0.06, 0.0, subtype='DISTANCE')
+    vp_width = b.input("Viewport Width", DIST, 0.02, 0.0, subtype='DISTANCE')
+    in_viewport = b.node('FunctionNodeBooleanMath', {
+        0: use_vp, 1: b.node('GeometryNodeIsViewport').outputs[0]}, operation='AND').outputs[0]
+
+    def pick(render_value, viewport_value, kind='FLOAT'):
+        return b.node('GeometryNodeSwitch', {"Switch": in_viewport, "False": render_value,
+                                             "True": viewport_value}, input_type=kind).outputs[0]
+
+    thickness = pick(thickness, vp_thickness)
+    sides = pick(sides, vp_sides, 'INT')
+    length = pick(length, vp_length)
+    width = pick(width, vp_width)
 
     def boolean(operation, a, c=None):
         inputs = {0: a} if c is None else {0: a, 1: c}
@@ -144,6 +161,9 @@ _INPUTS = (
     ("Auto Smooth", "auto_smooth"), ("Threshold", "smooth_threshold"),
     ("Generate Mapping Coords", "mapping"), ("Twist Correction", "twist_correction"), ("Cap", "cap"),
     ("Quad Cap", "quad_cap"), ("Cap Segments", "cap_segments"), ("Sphere", "cap_sphere"),
+    ("Use Viewport Settings", "use_viewport_settings"), ("Viewport Thickness", "viewport_thickness"),
+    ("Viewport Sides", "viewport_sides"), ("Viewport Length", "viewport_rect_length"),
+    ("Viewport Width", "viewport_rect_width"),
 )
 
 
@@ -177,16 +197,24 @@ def draw(layout, obj):
     col = layout.column(align=True)
     col.prop(p, "render_renderer")
     col.prop(p, "render_viewport")
+    layout.prop(p, "use_viewport_settings")
+    viewport = p.use_viewport_settings and p.render_settings_target == 'VIEWPORT'
+    if p.use_viewport_settings:
+        layout.row().prop(p, "render_settings_target", expand=True)
     layout.row().prop(p, "render_mode", expand=True)
     col = layout.column(align=True)
     if p.render_mode == 'RADIAL':
-        col.prop(p, "thickness")
-        col.prop(p, "thickness_sides")
+        col.prop(p, "viewport_thickness" if viewport else "thickness")
+        col.prop(p, "viewport_sides" if viewport else "thickness_sides")
         col.prop(p, "render_angle")
     else:
-        col.prop(p, "rect_length")
-        col.prop(p, "rect_width")
+        col.prop(p, "viewport_rect_length" if viewport else "rect_length")
+        col.prop(p, "viewport_rect_width" if viewport else "rect_width")
         col.prop(p, "rect_angle")
+        if not viewport:
+            row = col.row(align=True)
+            row.prop(p, "rect_aspect")
+            row.prop(p, "rect_aspect_lock", text="", icon='LOCKED' if p.rect_aspect_lock else 'UNLOCKED')
     row = layout.row(align=True)
     row.prop(p, "auto_smooth")
     sub = row.row(align=True)
