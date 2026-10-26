@@ -243,6 +243,28 @@ class MAXIMIZE_OT_freeze(Operator):
         return {'FINISHED'}
 
 
+class MAXIMIZE_OT_see_through_objects(Operator):
+    """See-Through (Alt+X): the selected objects show semi-transparent; in Blender builds without
+    per-object See-Through, the whole viewport's X-Ray"""
+    bl_idname = "maximize.see_through_objects"
+    bl_label = "See-Through"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.space_data is not None and context.space_data.type == 'VIEW_3D'
+
+    def execute(self, context):
+        objects = context.selected_objects if context.mode == 'OBJECT' else [context.active_object]
+        objects = [o for o in objects if o is not None]
+        if not hasattr(bpy.types.Object, "show_see_through") or not objects:
+            return bpy.ops.view3d.toggle_xray()
+        state = not all(o.show_see_through for o in objects)
+        for obj in objects:
+            obj.show_see_through = state
+        return {'FINISHED'}
+
+
 class MAXIMIZE_OT_show_end_result(Operator):
     """Show End Result (Alt+`): toggle whether the modifier stack shows while editing sub-objects"""
     bl_idname = "maximize.show_end_result"
@@ -267,6 +289,7 @@ class MAXIMIZE_OT_show_end_result(Operator):
 
 classes = (
     MAXIMIZE_OT_freeze,
+    MAXIMIZE_OT_see_through_objects,
     MAXIMIZE_OT_show_end_result,
     MAXIMIZE_OT_array,
     MAXIMIZE_OT_spacing,

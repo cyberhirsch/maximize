@@ -138,7 +138,7 @@ ALIASES = (
     ("unwrap_uvw", "Unwrap UVW", "uv.unwrap", {}, 'POLY', "Unwrap the selected polygons"),
     # Display.
     ("isolate", "Isolate Selection", "view3d.localview", {}, 'DISPLAY', "Show only the selection (Alt+Q)"),
-    ("see_through", "See-Through", "view3d.toggle_xray", {}, 'DISPLAY', "Toggle see-through display (Alt+X)"),
+    ("see_through", "See-Through", "maximize.see_through_objects", {}, 'DISPLAY', "Toggle see-through display (Alt+X)"),
 )
 
 

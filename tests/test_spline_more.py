@@ -196,4 +196,26 @@ for bp in sp.bezier_points:
     bp.select_control_point = False
 made = spline_more.connect_copies(data, Vector((0, 0, 1)))
 check("connect copy", made == 2 and len(data.splines) == 4, made)
+
+# Bind: the end of one spline stays on the middle of the other's segment.
+data = bpy.data.curves.new("Bind", 'CURVE')
+a = data.splines.new('BEZIER')
+a.bezier_points.add(1)
+a.bezier_points[0].co = (0, 0, 0)
+a.bezier_points[1].co = (2, 0, 0)
+for bp in a.bezier_points:
+    bp.handle_left_type = bp.handle_right_type = 'VECTOR'
+b = data.splines.new('BEZIER')
+b.bezier_points.add(1)
+b.bezier_points[0].co = (5, 5, 0)
+b.bezier_points[1].co = (1, 3, 0)
+spline_more.bind(data, 1, 1, 0, 0)
+check("bind snaps", (Vector(data.splines[1].bezier_points[1].co) - Vector((1, 0, 0))).length < 1e-5,
+      tuple(data.splines[1].bezier_points[1].co))
+data.splines[0].bezier_points[1].co = (4, 0, 0)
+data.splines[0].bezier_points[1].handle_left_type = 'VECTOR'
+spline_more.apply_binds(data)
+check("bind follows", abs(data.splines[1].bezier_points[1].co.x - 2.0) < 1e-4, tuple(data.splines[1].bezier_points[1].co))
+data.splines[1].bezier_points[1].select_control_point = True
+check("unbind", spline_more.unbind(data) == 1 and "mx_bind" not in data)
 say("DONE")

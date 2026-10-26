@@ -593,6 +593,105 @@ def _adaptive_watch():
 
 
 # ------------------------------------------------------------------------------
+# Bind / Unbind: an end vertex stays on the middle of a segment
+
+BIND = "mx_bind"
+
+
+def _segment_point(curve, spline_index, segment, t=0.5):
+    spline = curve.splines[spline_index]
+    points = _read(spline)
+    p0, p1, p2, p3 = _segment(points, segment % len(points))
+    s = 1.0 - t
+    return p0 * s ** 3 + p1 * 3 * s * s * t + p2 * 3 * s * t * t + p3 * t ** 3
+
+
+def bind(curve, spline_index, point_index, target_spline, segment):
+    """Max's Bind: the end vertex (spline_index, point_index) follows the middle of `segment`."""
+    binds = [list(b) for b in curve.get(BIND, [])]
+    binds = [b for b in binds if b[:2] != [spline_index, point_index]]
+    binds.append([spline_index, point_index, target_spline, segment])
+    curve[BIND] = binds
+    apply_binds(curve)
+
+
+def unbind(curve, only_selected=True):
+    binds = [list(b) for b in curve.get(BIND, [])]
+    keep = []
+    for b in binds:
+        try:
+            bp = curve.splines[b[0]].bezier_points[b[1]]
+        except IndexError:
+            continue
+        if only_selected and not bp.select_control_point:
+            keep.append(b)
+    if keep:
+        curve[BIND] = keep
+    elif BIND in curve:
+        del curve[BIND]
+    return len(binds) - len(keep)
+
+
+def apply_binds(curve):
+    """Move every bound vertex (with its handles) onto its segment. Returns True if any moved."""
+    moved = False
+    for si, pi, sj, seg in curve.get(BIND, []):
+        try:
+            bp = curve.splines[si].bezier_points[pi]
+            target = _segment_point(curve, sj, seg)
+        except (IndexError, ZeroDivisionError):
+            continue
+        delta = target - bp.co
+        if delta.length > 1e-7:
+            bp.co += delta
+            bp.handle_left += delta
+            bp.handle_right += delta
+            moved = True
+    return moved
+
+
+def _bind_watch():
+    for curve in bpy.data.curves:
+        if BIND in curve and not curve.is_editmode:
+            if apply_binds(curve):
+                curve.update_tag()
+    return 0.3
+
+
+class MAXIMIZE_OT_spline_bind(_PickSpline, Operator):
+    """Max's Bind: select an end vertex, then click a segment; the vertex stays on that segment's
+    middle"""
+    bl_idname = "maximize.spline_bind"
+    bl_label = "Bind"
+    status = "Bind: click the segment the selected end vertex should stay on"
+
+    def act(self, curve, index, u):
+        ends = [(si, pi) for si, s in enumerate(curve.splines) if not s.use_cyclic_u
+                for pi in (0, len(s.bezier_points) - 1) if s.bezier_points[pi].select_control_point]
+        if not ends:
+            return
+        si, pi = ends[0]
+        if si == index:
+            return
+        bind(curve, si, pi, index, int(u))
+
+
+class MAXIMIZE_OT_spline_unbind(Operator):
+    """Max's Unbind: the selected vertices stop following their segments"""
+    bl_idname = "maximize.spline_unbind"
+    bl_label = "Unbind"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'EDIT_CURVE'
+
+    def execute(self, context):
+        _with_object_mode(context, lambda objects: [unbind(o.data) for o in objects])
+        return {'FINISHED'}
+
+
+# ------------------------------------------------------------------------------
 # Connect Copy: Shift+drag copies of segments get connected to their originals
 
 _last_duplicate = None
@@ -859,6 +958,8 @@ def draw_geometry_extras(layout, context, obj):
     grid.operator_menu_enum("maximize.spline_mirror_max", "axis", text="Mirror")
     grid.operator_menu_enum("maximize.spline_explode_max", "to", text="Explode")
     grid.operator("maximize.spline_detach_max", text="Detach...")
+    grid.operator("maximize.spline_bind")
+    grid.operator("maximize.spline_unbind")
     box.prop(p, "connect_copy")
 
 
@@ -880,6 +981,8 @@ classes = (
     MAXIMIZE_OT_spline_mirror_max,
     MAXIMIZE_OT_section_plane,
     MAXIMIZE_OT_section_create_shape,
+    MAXIMIZE_OT_spline_bind,
+    MAXIMIZE_OT_spline_unbind,
 )
 
 
@@ -892,6 +995,7 @@ def register():
         _segments_handle = bpy.types.SpaceView3D.draw_handler_add(_draw_selected_segments, (), 'WINDOW', 'POST_VIEW')
     bpy.app.timers.register(_adaptive_watch, persistent=True)
     bpy.app.timers.register(_connect_copy_watch, persistent=True)
+    bpy.app.timers.register(_bind_watch, persistent=True)
     bpy.app.handlers.depsgraph_update_post.append(_section_dirty)
     global _sections_handle
     if not bpy.app.background:
@@ -909,7 +1013,7 @@ def unregister():
         _sections_handle = None
     if _section_dirty in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.remove(_section_dirty)
-    for timer in (_adaptive_watch, _connect_copy_watch):
+    for timer in (_adaptive_watch, _connect_copy_watch, _bind_watch):
         if bpy.app.timers.is_registered(timer):
             bpy.app.timers.unregister(timer)
     if _numbers_handle is not None:
