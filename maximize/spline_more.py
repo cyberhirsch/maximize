@@ -18,7 +18,7 @@ import math
 import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty
 from bpy.types import Operator
-from mathutils import Matrix
+from mathutils import Matrix, Vector
 
 from .spline_tools import (
     _PickSpline, _Point, _edit_curves, _insert, _read, _segment, _segment_count, _straight,
@@ -593,6 +593,161 @@ def _adaptive_watch():
 
 
 # ------------------------------------------------------------------------------
+# Connect Copy: Shift+drag copies of segments get connected to their originals
+
+_last_duplicate = None
+
+
+def connect_copies(curve, delta):
+    """Straight splines from each selected vertex (the copies) back to the unselected vertex it was
+    copied from, `delta` (local) away. Returns how many were made."""
+    originals = [bp.co.copy() for s in curve.splines for bp in s.bezier_points if not bp.select_control_point]
+    copies = [bp.co.copy() for s in curve.splines for bp in s.bezier_points if bp.select_control_point]
+    made = 0
+    for co in copies:
+        source = co - delta
+        if any((o - source).length < 1e-4 for o in originals):
+            connect_points(curve, [source, co], True, False)
+            made += 1
+    return made
+
+
+def _connect_copy_watch():
+    global _last_duplicate
+    wm = bpy.context.window_manager
+    ops = wm.operators if wm else ()
+    if not ops or ops[-1].bl_idname != "CURVE_OT_duplicate_move":
+        return 0.2
+    op = ops[-1]
+    if op.as_pointer() == _last_duplicate:
+        return 0.2
+    _last_duplicate = op.as_pointer()
+    obj = bpy.context.view_layer.objects.active if bpy.context.view_layer else None
+    if obj is None or obj.type != 'CURVE' or obj.mode != 'EDIT' or not obj.data.maximize_shape.connect_copy:
+        return 0.2
+    move = next((m for m in getattr(op, "macros", {}).values() if m.bl_idname == "TRANSFORM_OT_translate"), None)
+    if move is None:
+        return 0.2
+    delta = obj.matrix_world.inverted_safe().to_3x3() @ Vector(move.properties.value)
+    window = wm.windows[0] if wm.windows else None
+    if window is None or delta.length < 1e-9:
+        return 0.2
+    with bpy.context.temp_override(window=window):
+        if _with_object_mode(bpy.context, lambda objects: connect_copies(obj.data, delta)):
+            bpy.ops.ed.undo_push(message="Connect Copy")
+    return 0.2
+
+
+# ------------------------------------------------------------------------------
+# Section as a plane object: move it, the cut shows live, Create Shape makes the shape
+
+SECTION_TAG = "maximize_section"
+_section_cache = {}
+
+
+def _section_targets(context, plane):
+    return [o for o in context.view_layer.objects if o.type == 'MESH' and o != plane and
+            not o.get(SECTION_TAG) and o.visible_get()]
+
+
+def _section_frame(plane):
+    mw = plane.matrix_world
+    return mw.translation.copy(), (mw.to_3x3() @ Vector((0.0, 0.0, 1.0))).normalized()
+
+
+class MAXIMIZE_OT_section_plane(Operator):
+    """Max's Section: a plane object at the 3D cursor; move or rotate it and the cut shows in
+    yellow; Create Shape turns the cut into a shape"""
+    bl_idname = "maximize.section_plane"
+    bl_label = "Section Plane"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    size: FloatProperty(name="Size", default=2.0, min=0.0, unit='LENGTH')
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'OBJECT'
+
+    def execute(self, context):
+        import bmesh
+        mesh = bpy.data.meshes.new("Section")
+        bm = bmesh.new()
+        bmesh.ops.create_grid(bm, x_segments=1, y_segments=1, size=self.size / 2.0)
+        bm.to_mesh(mesh)
+        bm.free()
+        plane = bpy.data.objects.new("Section", mesh)
+        plane[SECTION_TAG] = True
+        plane.display_type = 'WIRE'
+        plane.hide_render = True
+        plane.visible_shadow = False
+        context.collection.objects.link(plane)
+        plane.matrix_world = context.scene.cursor.matrix
+        for o in context.selected_objects:
+            o.select_set(False)
+        plane.select_set(True)
+        context.view_layer.objects.active = plane
+        return {'FINISHED'}
+
+
+class MAXIMIZE_OT_section_create_shape(Operator):
+    """Max's Section > Create Shape: the cut of the section plane through the visible meshes"""
+    bl_idname = "maximize.section_create_shape"
+    bl_label = "Create Shape"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return context.mode == 'OBJECT' and obj is not None and bool(obj.get(SECTION_TAG))
+
+    def execute(self, context):
+        from .spline_tools import section_curve
+        plane = context.active_object
+        origin, normal = _section_frame(plane)
+        obj = section_curve(context, _section_targets(context, plane), origin, normal)
+        if obj is None:
+            self.report({'WARNING'}, "The section cuts nothing")
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+
+def _section_dirty(*_args):
+    _section_cache.clear()
+
+
+def _draw_sections():
+    context = bpy.context
+    if context.mode != 'OBJECT':
+        return
+    planes = [o for o in context.view_layer.objects if o.get(SECTION_TAG) and o.visible_get()]
+    if not planes:
+        return
+    from .spline_tools import section_loops
+    lines = []
+    for plane in planes:
+        key = (plane.name, tuple(map(tuple, plane.matrix_world)))
+        cached = _section_cache.get(key)
+        if cached is None:
+            origin, normal = _section_frame(plane)
+            cached = []
+            for points, closed in section_loops(context, _section_targets(context, plane), origin, normal):
+                ring = points + points[:1] if closed else points
+                for a, b in zip(ring, ring[1:]):
+                    cached += [a, b]
+            _section_cache[key] = cached
+        lines += cached
+    if not lines:
+        return
+    import gpu
+    from gpu_extras.batch import batch_for_shader
+    shader = gpu.shader.from_builtin('POLYLINE_UNIFORM_COLOR')
+    shader.uniform_float("viewportSize", (context.region.width, context.region.height))
+    shader.uniform_float("lineWidth", 2.0)
+    shader.uniform_float("color", (1.0, 0.9, 0.1, 1.0))
+    batch_for_shader(shader, 'LINES', {"pos": lines}).draw(shader)
+
+
+# ------------------------------------------------------------------------------
 # Show Selected Segs
 
 _segments_handle = None
@@ -639,6 +794,7 @@ def _draw_selected_segments():
 # Show Vertex Numbers
 
 _numbers_handle = None
+_sections_handle = None
 
 
 def _draw_vertex_numbers():
@@ -671,7 +827,9 @@ def draw_geometry_extras(layout, context, obj):
     p = obj.data.maximize_shape
     box = layout.box()
     box.label(text="Selection")
-    box.prop(p, "show_selected_segments")
+    row = box.row(align=True)
+    row.prop(p, "show_selected_segments")
+    row.prop(p, "segment_end")
     row = box.row(align=True)
     row.prop(p, "show_vertex_numbers")
     sub = row.row(align=True)
@@ -701,6 +859,7 @@ def draw_geometry_extras(layout, context, obj):
     grid.operator_menu_enum("maximize.spline_mirror_max", "axis", text="Mirror")
     grid.operator_menu_enum("maximize.spline_explode_max", "to", text="Explode")
     grid.operator("maximize.spline_detach_max", text="Detach...")
+    box.prop(p, "connect_copy")
 
 
 classes = (
@@ -719,6 +878,8 @@ classes = (
     MAXIMIZE_OT_spline_detach_max,
     MAXIMIZE_OT_spline_explode_max,
     MAXIMIZE_OT_spline_mirror_max,
+    MAXIMIZE_OT_section_plane,
+    MAXIMIZE_OT_section_create_shape,
 )
 
 
@@ -730,6 +891,11 @@ def register():
         _numbers_handle = bpy.types.SpaceView3D.draw_handler_add(_draw_vertex_numbers, (), 'WINDOW', 'POST_PIXEL')
         _segments_handle = bpy.types.SpaceView3D.draw_handler_add(_draw_selected_segments, (), 'WINDOW', 'POST_VIEW')
     bpy.app.timers.register(_adaptive_watch, persistent=True)
+    bpy.app.timers.register(_connect_copy_watch, persistent=True)
+    bpy.app.handlers.depsgraph_update_post.append(_section_dirty)
+    global _sections_handle
+    if not bpy.app.background:
+        _sections_handle = bpy.types.SpaceView3D.draw_handler_add(_draw_sections, (), 'WINDOW', 'POST_VIEW')
 
 
 def unregister():
@@ -737,8 +903,15 @@ def unregister():
     if _segments_handle is not None:
         bpy.types.SpaceView3D.draw_handler_remove(_segments_handle, 'WINDOW')
         _segments_handle = None
-    if bpy.app.timers.is_registered(_adaptive_watch):
-        bpy.app.timers.unregister(_adaptive_watch)
+    global _sections_handle
+    if _sections_handle is not None:
+        bpy.types.SpaceView3D.draw_handler_remove(_sections_handle, 'WINDOW')
+        _sections_handle = None
+    if _section_dirty in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.remove(_section_dirty)
+    for timer in (_adaptive_watch, _connect_copy_watch):
+        if bpy.app.timers.is_registered(timer):
+            bpy.app.timers.unregister(timer)
     if _numbers_handle is not None:
         bpy.types.SpaceView3D.draw_handler_remove(_numbers_handle, 'WINDOW')
         _numbers_handle = None

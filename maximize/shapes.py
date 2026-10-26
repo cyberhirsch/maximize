@@ -397,6 +397,10 @@ class MaximizeShape(PropertyGroup):
                            description="Steps follow the curvature, about 6 degrees per step (Steps and "
                                        "Optimize are ignored); one count per spline")
     show_vertex_numbers: BoolProperty(name="Show Vertex Numbers", description="Number the vertices of each spline")
+    segment_end: BoolProperty(name="Segment End",
+                              description="At vertex level a click on a segment selects its nearer end")
+    connect_copy: BoolProperty(name="Connect Copy",
+                               description="Shift+drag copies of segments get connected to the originals")
     show_selected_segments: BoolProperty(name="Show Selected Segs", default=True,
                                          description="Draw selected segments in red, as Max does")
     vertex_numbers_selected: BoolProperty(name="Selected Only", description="Number only the selected vertices")

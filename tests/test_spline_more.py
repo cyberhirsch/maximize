@@ -167,4 +167,33 @@ mesh = ev.to_mesh()
 xs = [v.co.z for v in mesh.vertices]
 check("viewport thickness used", xs and max(xs) - min(xs) > 0.4, xs and max(xs) - min(xs))
 ev.to_mesh_clear()
+
+# Live Section: a plane through a cube cuts a square; Create Shape makes it.
+bpy.ops.object.mode_set(mode='OBJECT') if ctx.mode != 'OBJECT' else None
+bpy.ops.mesh.primitive_cube_add(location=(20, 0, 0))
+ctx.scene.cursor.location = (20, 0, 0)
+bpy.ops.maximize.section_plane()
+plane = ctx.active_object
+loops = spline_tools.section_loops(ctx, spline_more._section_targets(ctx, plane), *spline_more._section_frame(plane))
+check("section loops", len(loops) == 1 and loops[0][1] and len(loops[0][0]) >= 4, [len(l[0]) for l in loops])
+before = len(bpy.data.curves)
+bpy.ops.maximize.section_create_shape()
+check("section create shape", len(bpy.data.curves) == before + 1)
+
+# Connect Copy: copies moved by (0, 0, 1) get joined to their originals.
+data = bpy.data.curves.new("CC", 'CURVE')
+sp = data.splines.new('BEZIER')
+sp.bezier_points.add(1)
+sp.bezier_points[0].co = (0, 0, 0)
+sp.bezier_points[1].co = (1, 0, 0)
+sp2 = data.splines.new('BEZIER')
+sp2.bezier_points.add(1)
+sp2.bezier_points[0].co = (0, 0, 1)
+sp2.bezier_points[1].co = (1, 0, 1)
+for bp in sp2.bezier_points:
+    bp.select_control_point = True
+for bp in sp.bezier_points:
+    bp.select_control_point = False
+made = spline_more.connect_copies(data, Vector((0, 0, 1)))
+check("connect copy", made == 2 and len(data.splines) == 4, made)
 say("DONE")

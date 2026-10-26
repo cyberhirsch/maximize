@@ -208,6 +208,10 @@ def draw_modify(layout, context):
         return
     if not has_command_panel():
         layout.prop(obj, "name", text="")
+    if obj.get("maximize_section"):
+        box = layout.box()
+        box.label(text="Section Parameters")
+        box.operator("maximize.section_create_shape")
     if primitives.is_parametric(obj):
         box = layout.box()
         box.label(text="Parameters")

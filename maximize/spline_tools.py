@@ -664,6 +664,21 @@ class MAXIMIZE_OT_freehand(Operator):
 def section_curve(context, objects, origin, normal, name="Section"):
     """Max's Section > Create Shape: where the plane (origin, normal) cuts the meshes, as a shape
     of corner vertices. Returns the new object, or None if nothing is cut."""
+    loops = section_loops(context, objects, origin, normal)
+    if not loops:
+        return None
+    from .primitives import _max_name
+    data = bpy.data.curves.new(name, 'CURVE')
+    data.dimensions = '3D'
+    for points, closed in loops:
+        _write(data, None, [_Point(co) for co in points], cyclic=closed)
+    obj = bpy.data.objects.new(_max_name(name), data)
+    context.collection.objects.link(obj)
+    return obj
+
+
+def section_loops(context, objects, origin, normal):
+    """[(world points, closed)] where the plane cuts the meshes."""
     import bmesh
     depsgraph = context.evaluated_depsgraph_get()
     loops = []
@@ -695,16 +710,7 @@ def section_curve(context, objects, origin, normal, name="Section"):
             closed = len(chain) > 2 and chain[0] == chain[-1]
             loops.append(([v.co.copy() for v in (chain[:-1] if closed else chain)], closed))
         bm.free()
-    if not loops:
-        return None
-    from .primitives import _max_name
-    data = bpy.data.curves.new(name, 'CURVE')
-    data.dimensions = '3D'
-    for points, closed in loops:
-        _write(data, None, [_Point(co) for co in points], cyclic=closed)
-    obj = bpy.data.objects.new(_max_name(name), data)
-    context.collection.objects.link(obj)
-    return obj
+    return loops
 
 
 class MAXIMIZE_OT_section(Operator):
@@ -1227,7 +1233,24 @@ class MAXIMIZE_OT_spline_pick(_PickSpline, Operator):
     def invoke(self, context, event):
         level = spline_level(context)
         if level == 'VERTEX':
-            return {'PASS_THROUGH'}
+            # Max's Segment End: a click on a segment selects its nearer end.
+            if not any(o.data.maximize_shape.segment_end for o in _edit_curves(context)):
+                return {'PASS_THROUGH'}
+            hit = self._pick(context, event)
+            if hit is None:
+                return {'PASS_THROUGH'}
+            obj, index, u = hit
+
+            def pick_end(_objects):
+                if not (self.extend or self.deselect):
+                    for other in _objects:
+                        _deselect_all(other.data)
+                points = obj.data.splines[index].bezier_points
+                _select_point(points[int(round(u)) % len(points)], not self.deselect)
+
+            _with_object_mode(context, pick_end)
+            context.area.tag_redraw()
+            return {'FINISHED'}
         hit = self._pick(context, event)
         if hit is None:
             if not (self.extend or self.deselect):

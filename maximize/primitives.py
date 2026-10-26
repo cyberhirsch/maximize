@@ -558,7 +558,8 @@ class MAXIMIZE_MT_create_shapes(bpy.types.Menu):
             layout.operator("maximize.add_primitive", text=name, icon=icon).kind = ident
         layout.operator("object.text_add", text="Text", icon='OUTLINER_OB_FONT')
         layout.operator("maximize.freehand", icon='GREASEPENCIL')
-        layout.operator("maximize.section", icon='MOD_BOOLEAN')
+        layout.operator("maximize.section_plane", text="Section", icon='MOD_BOOLEAN')
+        layout.operator("maximize.section", text="Section at Cursor", icon='MOD_BOOLEAN')
         _draw_create_options(layout)
 
 
