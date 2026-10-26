@@ -221,6 +221,8 @@ def _apply_layout():
                 continue
             space = area.spaces.active
             space.show_region_ui = True
+            from .cameras import apply_viewport_defaults
+            apply_viewport_defaults(space)
             region = next((r for r in area.regions if r.type == 'WINDOW'), None)
             if region is None:
                 continue

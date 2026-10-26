@@ -105,6 +105,9 @@ def apply(km, moritz=False, maya_navigation=False):
     km.view("view3d.view_camera", _event('C'))
     km.view("maximize.camera_from_view", _event('C', ctrl=True))
     km.view("maximize.viewport_maximize", _event('W', alt=True))
+    # Max's V: the Point-of-View menu of the viewport under the mouse. Only in the 3D View keymap,
+    # so Edit Mode keeps Blender's V (Rip, handle types).
+    km.bind("3D View", "wm.call_menu", _event('V'), {"name": "MAXIMIZE_MT_point_of_view"})
     km.view("view3d.localview", _event('Q', alt=True))
 
     # Display.
@@ -166,15 +169,17 @@ def apply(km, moritz=False, maya_navigation=False):
     # Double-click an object: select it and its children.
     km.bind(om, "object.select_grouped", _event('LEFTMOUSE', 'DOUBLE_CLICK'),
             {"type": 'CHILDREN_RECURSIVE', "extend": True})
+    # Without the add-on, the core's `object.subobject_level` (Border as Edge, Element as Polygon).
+    level_op = "maximize.subobject" if km.available("maximize.subobject", {}) else "object.subobject_level"
     for key, level in (('ONE', 'VERTEX'), ('TWO', 'EDGE'), ('THREE', 'BORDER'),
                        ('FOUR', 'POLYGON'), ('FIVE', 'ELEMENT')):
-        km.bind(om, "maximize.subobject", _event(key), {"level": level})
-        km.bind("Mesh", "maximize.subobject", _event(key), {"level": level})
-    km.bind("Mesh", "maximize.subobject", _event('SIX'), {"level": 'OBJECT'})
+        km.bind(om, level_op, _event(key), {"level": level})
+        km.bind("Mesh", level_op, _event(key), {"level": level})
+    km.bind("Mesh", level_op, _event('SIX'), {"level": 'OBJECT'})
     # Editable Spline: 1 vertex, 2 segment, 3 spline (one Edit Mode in Blender), 6 back to the object.
     if "Curve" in km.items:
         for key, level in (('ONE', 'VERTEX'), ('TWO', 'EDGE'), ('THREE', 'BORDER'), ('SIX', 'OBJECT')):
-            km.bind("Curve", "maximize.subobject", _event(key), {"level": level})
+            km.bind("Curve", level_op, _event(key), {"level": level})
         # Segment and Spline levels: a click picks a whole segment or spline; Delete works per level.
         for mods, props in (({}, {}), ({"ctrl": True}, {"extend": True}), ({"alt": True}, {"deselect": True})):
             km.append("Curve", "maximize.spline_pick", _event('LEFTMOUSE', 'CLICK', **mods), props)
