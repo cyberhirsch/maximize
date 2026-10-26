@@ -283,7 +283,10 @@ def _draw_poly_level(layout, context):
         return
     label, ops = _POLY_LEVEL_TOOLS[level]
     box = layout.box()
-    box.label(text=label)
+    row = box.row()
+    row.label(text=label)
+    # Max's caddy "Apply and Continue": run the last tool again with the same settings.
+    row.operator("screen.repeat_last", text="", icon='ADD')
     grid = box.grid_flow(columns=2, even_columns=True, align=True)
     for op in ops:
         if op == "bevel_poly":

@@ -18,9 +18,9 @@ import bmesh
 import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty, \
     PointerProperty, StringProperty
-from bpy.types import Operator, Panel
+from bpy.types import GizmoGroup, Operator, Panel
 from bpy_extras import view3d_utils
-from mathutils import Matrix, Quaternion, Vector, geometry
+from mathutils import Euler, Matrix, Quaternion, Vector, geometry
 
 
 def _edit_meshes(context):
@@ -754,6 +754,109 @@ class MAXIMIZE_OT_slice_plane(_EditMesh, Operator):
         return {'FINISHED'}
 
 
+def _slice_plane_world(wm):
+    """The live Slice Plane in world space: position and normal."""
+    rot = Euler(wm.maximize_slice_rotation).to_matrix()
+    return Vector(wm.maximize_slice_location), (rot @ Vector((0.0, 0.0, 1.0))).normalized()
+
+
+def _reset_slice_plane(context):
+    obj = context.edit_object
+    bm = bmesh.from_edit_mesh(obj.data)
+    wm = context.window_manager
+    wm.maximize_slice_location = obj.matrix_world @ _selection_centre(bm)
+    wm.maximize_slice_rotation = (0.0, 0.0, 0.0)
+
+
+class MAXIMIZE_OT_slice_plane_mode(_EditMesh, Operator):
+    """Max's Slice Plane button: show a plane to move and rotate in the viewport, then Slice"""
+    bl_idname = "maximize.slice_plane_mode"
+    bl_label = "Slice Plane"
+
+    action: EnumProperty(items=(
+        ('TOGGLE', "Toggle", "Show or hide the plane"),
+        ('RESET', "Reset Plane", "Put the plane back through the selection, facing up"),
+        ('SLICE', "Slice", "Cut with the plane"),
+        ('SPLIT', "Slice and Split", "Cut with the plane and separate the mesh along the cut"),
+    ), default='TOGGLE')
+
+    def execute(self, context):
+        wm = context.window_manager
+        if self.action == 'TOGGLE':
+            wm.maximize_slice_active = not wm.maximize_slice_active
+            if wm.maximize_slice_active:
+                _reset_slice_plane(context)
+            return {'FINISHED'}
+        if self.action == 'RESET':
+            _reset_slice_plane(context)
+            return {'FINISHED'}
+        co, no = _slice_plane_world(wm)
+        mw_inv = context.edit_object.matrix_world.inverted_safe()
+        return bpy.ops.maximize.slice_plane(
+            plane_co=mw_inv @ co, plane_no=(mw_inv.transposed().to_3x3() @ no).normalized(),
+            split=self.action == 'SPLIT')
+
+
+class MAXIMIZE_GGT_slice_plane(GizmoGroup):
+    bl_idname = "MAXIMIZE_GGT_slice_plane"
+    bl_label = "Slice Plane"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'WINDOW'
+    bl_options = {'3D', 'PERSISTENT'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'EDIT_MESH' and context.window_manager.maximize_slice_active
+
+    def setup(self, context):
+        wm = context.window_manager
+        self.plane = self.gizmos.new("GIZMO_GT_primitive_3d")
+        self.plane.draw_style = 'PLANE'
+        self.plane.color = (1.0, 0.85, 0.2)
+        self.plane.alpha = 0.25
+        self.plane.hide_select = True
+        self.move = self.gizmos.new("GIZMO_GT_move_3d")
+        self.move.draw_options = {'FILL', 'ALIGN_VIEW'}
+        self.move.target_set_prop("offset", wm, "maximize_slice_location")
+        self.dials = []
+        for index, color in ((0, (1.0, 0.3, 0.3)), (1, (0.4, 1.0, 0.4))):
+            dial = self.gizmos.new("GIZMO_GT_dial_3d")
+            dial.target_set_prop("offset", wm, "maximize_slice_rotation", index=index)
+            dial.color = color
+            dial.alpha = 0.6
+            dial.alpha_highlight = 1.0
+            self.dials.append(dial)
+        for gz in (self.move, *self.dials):
+            gz.color_highlight = (1.0, 1.0, 0.6)
+        self.draw_prepare(context)
+
+    def draw_prepare(self, context):
+        co, _no = _slice_plane_world(context.window_manager)
+        rot = Euler(context.window_manager.maximize_slice_rotation).to_matrix().to_4x4()
+        base = Matrix.Translation(co)
+        self.plane.matrix_basis = base @ rot
+        self.plane.scale_basis = 2.0
+        self.move.matrix_basis = Matrix.Translation(co)
+        # The dials turn the plane about its own X and Y axes.
+        x_axis = Matrix.Rotation(math.radians(90.0), 4, 'Y')
+        y_axis = Matrix.Rotation(math.radians(-90.0), 4, 'X')
+        self.dials[0].matrix_basis = base @ x_axis
+        self.dials[1].matrix_basis = base @ y_axis
+
+
+def draw_slice_plane(layout, context):
+    wm = context.window_manager
+    row = layout.row(align=True)
+    row.operator("maximize.slice_plane_mode", text="Slice Plane",
+                 depress=wm.maximize_slice_active).action = 'TOGGLE'
+    if wm.maximize_slice_active:
+        row.operator("maximize.slice_plane_mode", text="Slice").action = 'SLICE'
+        row.operator("maximize.slice_plane_mode", text="Split").action = 'SPLIT'
+        row.operator("maximize.slice_plane_mode", text="Reset Plane").action = 'RESET'
+    else:
+        row.operator("maximize.slice_plane", text="QuickSlice Flat")
+
+
 # ------------------------------------------------------------------------------
 # Named Selections Copy / Paste, Crease and Weight, Show Cage
 
@@ -863,6 +966,44 @@ def _set_show_cage(self, value):
         m.show_on_cage = not value
 
 
+_cage_handle = None
+
+
+def _draw_cage():
+    """Max's Show Cage colors: the base mesh's edges over the smoothed result, selected ones in their
+    own color (Blender's own cage wire uses the theme's edit colors)."""
+    context = bpy.context
+    obj = context.edit_object
+    if obj is None or obj.type != 'MESH' or not _get_show_cage(obj):
+        return
+    from . import preferences
+    prefs = preferences.get_prefs(context)
+    if prefs is None:
+        return
+    import gpu
+    from gpu_extras.batch import batch_for_shader
+    bm = bmesh.from_edit_mesh(obj.data)
+    mw = obj.matrix_world
+    lines, selected = [], []
+    for e in bm.edges:
+        if e.hide:
+            continue
+        pair = (mw @ e.verts[0].co, mw @ e.verts[1].co)
+        (selected if e.select else lines).extend(pair)
+    shader = gpu.shader.from_builtin('POLYLINE_UNIFORM_COLOR')
+    region = context.region
+    shader.uniform_float("viewportSize", (region.width, region.height))
+    shader.uniform_float("lineWidth", 1.5)
+    gpu.state.depth_test_set('LESS_EQUAL')
+    gpu.state.blend_set('ALPHA')
+    for points, color in ((lines, prefs.cage_color), (selected, prefs.cage_selected_color)):
+        if points:
+            shader.uniform_float("color", (*color, 1.0))
+            batch_for_shader(shader, 'LINES', {"pos": points}).draw(shader)
+    gpu.state.depth_test_set('NONE')
+    gpu.state.blend_set('NONE')
+
+
 def draw_edge_properties(layout, level):
     row = layout.row(align=True)
     if level == 'VERTEX':
@@ -875,17 +1016,20 @@ def draw_edge_properties(layout, level):
 
 def draw_extras(layout, context):
     """Edit Geometry extras: Slice Plane, Named Selections, Show Cage."""
-    row = layout.row(align=True)
-    row.operator("maximize.slice_plane")
-    op = row.operator("maximize.slice_plane", text="Split")
-    op.split = True
+    draw_slice_plane(layout, context)
     row = layout.row(align=True)
     row.label(text="Named Selections:")
     row.operator("maximize.named_selection_copy")
     row.operator("maximize.named_selection_paste")
     obj = context.edit_object
     if _cage_modifiers(obj):
-        layout.prop(obj, "maximize_show_cage")
+        row = layout.row(align=True)
+        row.prop(obj, "maximize_show_cage")
+        from . import preferences
+        prefs = preferences.get_prefs(context)
+        if prefs is not None:
+            row.prop(prefs, "cage_color", text="")
+            row.prop(prefs, "cage_selected_color", text="")
 
 
 class MAXIMIZE_PT_material_ids(Panel):
@@ -952,6 +1096,8 @@ classes = (
     MAXIMIZE_OT_insert_vertex,
     MAXIMIZE_OT_hinge_from_edge,
     MAXIMIZE_OT_slice_plane,
+    MAXIMIZE_OT_slice_plane_mode,
+    MAXIMIZE_GGT_slice_plane,
     MAXIMIZE_OT_cap,
     MAXIMIZE_OT_named_copy,
     MAXIMIZE_OT_named_paste,
@@ -964,16 +1110,31 @@ classes = (
 def register():
     bpy.types.WindowManager.maximize_material_id = IntProperty(name="ID", default=1, min=1, max=32767)
     bpy.types.WindowManager.maximize_material_clear = BoolProperty(name="Clear Selection", default=True)
+    bpy.types.WindowManager.maximize_slice_active = BoolProperty(name="Slice Plane")
+    bpy.types.WindowManager.maximize_slice_location = FloatVectorProperty(
+        name="Slice Plane Position", subtype='TRANSLATION', size=3)
+    bpy.types.WindowManager.maximize_slice_rotation = FloatVectorProperty(
+        name="Slice Plane Rotation", subtype='EULER', size=3)
     bpy.types.Object.maximize_show_cage = BoolProperty(
         name="Show Cage", get=_get_show_cage, set=_set_show_cage,
         description="Show the base mesh's wire around the smoothed result (TurboSmooth / Multires)")
     for cls in classes:
         bpy.utils.register_class(cls)
+    global _cage_handle
+    if not bpy.app.background:
+        _cage_handle = bpy.types.SpaceView3D.draw_handler_add(_draw_cage, (), 'WINDOW', 'POST_VIEW')
 
 
 def unregister():
+    global _cage_handle
+    if _cage_handle is not None:
+        bpy.types.SpaceView3D.draw_handler_remove(_cage_handle, 'WINDOW')
+        _cage_handle = None
     del bpy.types.Object.maximize_show_cage
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
+    del bpy.types.WindowManager.maximize_slice_rotation
+    del bpy.types.WindowManager.maximize_slice_location
+    del bpy.types.WindowManager.maximize_slice_active
     del bpy.types.WindowManager.maximize_material_clear
     del bpy.types.WindowManager.maximize_material_id

@@ -5,7 +5,7 @@
 """Add-on preferences and the Moritz / Max / Blender keymap switch."""
 
 import bpy
-from bpy.props import BoolProperty, EnumProperty
+from bpy.props import BoolProperty, EnumProperty, FloatVectorProperty
 
 
 KEYMAPS = (
@@ -77,6 +77,15 @@ class MaximizePreferences(bpy.types.AddonPreferences):
         default=True,
     )
     first_run_done: BoolProperty(default=False, options={'HIDDEN'})
+    # Max's Show Cage colors (Edit Poly > Edit Geometry).
+    cage_color: FloatVectorProperty(
+        name="Cage", subtype='COLOR', size=3, min=0.0, max=1.0, default=(1.0, 0.55, 0.1),
+        description="Color of the cage's edges",
+    )
+    cage_selected_color: FloatVectorProperty(
+        name="Selected Cage", subtype='COLOR', size=3, min=0.0, max=1.0, default=(1.0, 0.1, 0.1),
+        description="Color of the cage's selected edges",
+    )
 
     def draw(self, context):
         layout = self.layout
@@ -90,6 +99,9 @@ class MaximizePreferences(bpy.types.AddonPreferences):
         inputs = context.preferences.inputs
         col.prop(inputs, "use_rotate_around_active", text="Orbit Around Selection")
         col.prop(inputs, "use_zoom_to_mouse", text="Zoom About Mouse Point")
+        row = col.row(align=True)
+        row.prop(self, "cage_color")
+        row.prop(self, "cage_selected_color")
 
 
 def first_run_setup():
