@@ -397,6 +397,10 @@ class MaximizeShape(PropertyGroup):
                            description="Steps follow the curvature, about 6 degrees per step (Steps and "
                                        "Optimize are ignored); one count per spline")
     show_vertex_numbers: BoolProperty(name="Show Vertex Numbers", description="Number the vertices of each spline")
+    lock_handles: EnumProperty(name="Lock Handles", default='NONE', items=(
+        ('NONE', "Off", "Handles move one at a time"),
+        ('ALIKE', "Alike", "Dragging a handle moves the same handle of every selected vertex"),
+        ('ALL', "All", "Dragging a handle moves both handles of every selected vertex")))
     segment_end: BoolProperty(name="Segment End",
                               description="At vertex level a click on a segment selects its nearer end")
     connect_copy: BoolProperty(name="Connect Copy",

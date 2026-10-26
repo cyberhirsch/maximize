@@ -157,6 +157,54 @@ def _pick_subobject(context, location):
     return key, lambda: _faces_shape(mw, faces)
 
 
+def pick_curve(context, location, radius=15.0):
+    """Editable Spline: the vertex, segment or spline under the mouse (by level), as (key, shape)."""
+    from .spline_tools import _polyline, _read, spline_level
+    level = spline_level(context)
+    mouse = Vector(location)
+    best = None
+    for obj in context.objects_in_mode_unique_data:
+        if obj.type != 'CURVE':
+            continue
+        mw = obj.matrix_world
+        for si, spline in enumerate(obj.data.splines):
+            if spline.type != 'BEZIER' or spline.hide:
+                continue
+            points = _read(spline)
+            if level == 'VERTEX':
+                for pi, p in enumerate(points):
+                    at = _screen(context, mw @ p.co)
+                    if at is not None:
+                        d = (at - mouse).length
+                        if d < radius and (best is None or d < best[0]):
+                            best = (d, obj, si, pi, None)
+                continue
+            poly = _polyline(points, spline.use_cyclic_u)
+            for (u0, a), (u1, b) in zip(poly, poly[1:]):
+                pa, pb = _screen(context, mw @ a), _screen(context, mw @ b)
+                if pa is None or pb is None:
+                    continue
+                _point, t = intersect_point_line(mouse, pa, pb)
+                t = min(1.0, max(0.0, t))
+                d = (pa.lerp(pb, t) - mouse).length
+                if d < radius and (best is None or d < best[0]):
+                    best = (d, obj, si, int(u0), poly)
+    if best is None:
+        return None, None
+    _d, obj, si, index, poly = best
+    mw = obj.matrix_world
+    if level == 'VERTEX':
+        co = mw @ obj.data.splines[si].bezier_points[index].co
+        return ("KNOT", obj.name, si, index), lambda: {"points": [co]}
+    if level == 'SEGMENT':
+        poly = [(u, co) for u, co in poly if index <= u <= index + 1]
+        key = ("SEGMENT", obj.name, si, index)
+    else:
+        key = ("SPLINE", obj.name, si)
+    segs = [(mw @ a, mw @ b) for (_u0, a), (_u1, b) in zip(poly, poly[1:])]
+    return key, lambda: {"segments": segs}
+
+
 def _border(edge):
     border = {edge}
     stack = [edge]
@@ -225,6 +273,8 @@ class MAXIMIZE_GT_hover(Gizmo):
         try:
             if context.mode == 'OBJECT':
                 key, shape = _pick_object(context, location)
+            elif context.mode == 'EDIT_CURVE':
+                key, shape = pick_curve(context, location)
             else:
                 key, shape = _pick_subobject(context, location)
             if key != self.key:
@@ -264,7 +314,8 @@ class MAXIMIZE_GGT_hover(GizmoGroup):
     @classmethod
     def poll(cls, context):
         prefs = get_prefs(context)
-        return prefs is not None and prefs.use_hover_highlight and context.mode in {'OBJECT', 'EDIT_MESH'}
+        return prefs is not None and prefs.use_hover_highlight and \
+            context.mode in {'OBJECT', 'EDIT_MESH', 'EDIT_CURVE'}
 
     def setup(self, _context):
         self.gizmos.new(MAXIMIZE_GT_hover.bl_idname)

@@ -55,7 +55,7 @@ curve = rect.data
 n = len(pts(rect))
 first = Vector(pts(rect)[0].co)
 op = spline_more.MAXIMIZE_OT_spline_refine
-dummy = type("R", (), {"_added": []})()
+dummy = type("R", (), {"_added": [], "connect": False, "bind_first": False, "bind_last": False})()
 op.act(dummy, curve, 0, 0.5)
 check("refine adds a knot", len(curve.splines[0].bezier_points) == n + 1, len(curve.splines[0].bezier_points))
 check("refine keeps the shape", (Vector(curve.splines[0].bezier_points[0].co) - first).length < 1e-6)
@@ -218,4 +218,41 @@ spline_more.apply_binds(data)
 check("bind follows", abs(data.splines[1].bezier_points[1].co.x - 2.0) < 1e-4, tuple(data.splines[1].bezier_points[1].co))
 data.splines[1].bezier_points[1].select_control_point = True
 check("unbind", spline_more.unbind(data) == 1 and "mx_bind" not in data)
+
+# Refine Connect with Bind First and Bind Last: two clicks on two lines; the connecting spline's
+# ends are bound to the middles and no knot is added to the lines.
+data = bpy.data.curves.new("RB", 'CURVE')
+for y in (0.0, 2.0):
+    sp = data.splines.new('BEZIER')
+    sp.bezier_points.add(1)
+    sp.bezier_points[0].co = (0, y, 0)
+    sp.bezier_points[1].co = (2, y, 0)
+    for bp in sp.bezier_points:
+        bp.handle_left_type = bp.handle_right_type = 'VECTOR'
+r = type("R", (), {"connect": True, "bind_first": True, "bind_last": True, "linear": True, "closed": False})()
+r._added = []
+spline_more.MAXIMIZE_OT_spline_refine.act(r, data, 0, 0.3)
+spline_more.MAXIMIZE_OT_spline_refine.act(r, data, 1, 0.6)
+spline_more.MAXIMIZE_OT_spline_refine.finish(r)
+check("refine bind: no knots added", [len(s.bezier_points) for s in data.splines] == [2, 2, 2],
+      [len(s.bezier_points) for s in data.splines])
+ends = [tuple(round(c, 4) for c in bp.co) for bp in data.splines[2].bezier_points]
+check("refine bind: ends at the middles", ends == [(1.0, 0.0, 0.0), (1.0, 2.0, 0.0)], ends)
+check("refine bind: bound", len(data.get("mx_bind", [])) == 2)
+
+# Lock Handles: Alike moves the same handle of every selected knot; All moves the other side mirrored.
+data = bpy.data.curves.new("LH", 'CURVE')
+sp = data.splines.new('BEZIER')
+sp.bezier_points.add(2)
+for i, bp in enumerate(sp.bezier_points):
+    bp.co = (i, 0, 0)
+    bp.handle_left_type = bp.handle_right_type = 'FREE'
+    bp.handle_left, bp.handle_right = (i - 0.3, 0, 0), (i + 0.3, 0, 0)
+    bp.select_control_point = i < 2
+spline_more.move_locked_handles(data, 0, 0, 'RIGHT', Vector((0, 0.5, 0)), 'ALIKE')
+pts = sp.bezier_points
+check("lock alike", abs(pts[1].handle_right.y - 0.5) < 1e-6 and abs(pts[1].handle_left.y) < 1e-6 and
+      abs(pts[2].handle_right.y) < 1e-6)
+spline_more.move_locked_handles(data, 0, 0, 'RIGHT', Vector((0, 0.5, 0)), 'ALL')
+check("lock all", abs(pts[1].handle_left.y + 0.5) < 1e-6 and abs(pts[1].handle_right.y - 1.0) < 1e-6)
 say("DONE")

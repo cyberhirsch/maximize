@@ -40,8 +40,12 @@ class MAXIMIZE_OT_spline_refine(_PickSpline, Operator):
     connect: BoolProperty(name="Connect", description="Join the added vertices into a new spline")
     linear: BoolProperty(name="Linear", description="The connecting spline gets corner vertices")
     closed: BoolProperty(name="Closed", description="Close the connecting spline")
+    bind_first: BoolProperty(name="Bind First", description="Connect: the first vertex is bound to the middle "
+                             "of its segment instead of being added to it")
+    bind_last: BoolProperty(name="Bind Last", description="Connect: the same for the last vertex")
 
     def invoke(self, context, event):
+        # (curve, world-free local co, bound, points before the insert, cyclic, segment)
         self._added = []
         return super().invoke(context, event)
 
@@ -49,26 +53,66 @@ class MAXIMIZE_OT_spline_refine(_PickSpline, Operator):
         spline = curve.splines[index]
         if spline.type != 'BEZIER':
             return
+        segment = int(u)
+        if self.connect and self.bind_first and not self._added:
+            self._added.append([curve, _segment_point(curve, index, segment), True, None, False, segment])
+            return
         points = _read(spline)
+        before = [_Point(p.co, p.left, p.right, p.left_type, p.right_type, p.radius, p.tilt, False)
+                  for p in points]
         for p in points:
             p.select = False
         new = _insert(points, spline.use_cyclic_u, [u])
         if len(new) == len(points):
             return
         added = next(p for p in new if p.select)
-        self._added.append((curve, added.co.copy()))
+        self._added.append([curve, added.co.copy(), False, before, spline.use_cyclic_u, segment])
         _write(curve, spline, new)
 
+    def finish(self):
+        if self.bind_last and len(self._added) > 1 and not self._added[-1][2]:
+            # Bind Last: take back the last insert; the vertex goes on its segment's middle, bound.
+            entry = self._added[-1]
+            curve, co, _bound, before, cyclic, segment = entry
+            for spline in curve.splines:
+                if spline.type == 'BEZIER' and any((bp.co - co).length < 1e-6 for bp in spline.bezier_points):
+                    _write(curve, spline, before, cyclic=cyclic)
+                    break
+            p0, p1, p2, p3 = _segment(before, segment)
+            entry[1] = (p0 + 3 * p1 + 3 * p2 + p3) / 8.0
+            entry[2] = True
+        groups = {}
+        for curve, co, bound, *_rest in self._added:
+            groups.setdefault(curve, []).append((co, bound))
+        for curve, entries in groups.items():
+            if len(entries) < 2:
+                continue
+            connect_points(curve, [co for co, _b in entries], self.linear, self.closed)
+            new_index = len(curve.splines) - 1
+            for k in (0, len(entries) - 1):
+                co, bound = entries[k]
+                target = find_segment(curve, co, exclude=new_index) if bound else None
+                if target is not None:
+                    bind(curve, new_index, k, *target)
+
     def modal(self, context, event):
-        if event.type in {'RIGHTMOUSE', 'ESC'} and event.value == 'PRESS' and self.connect:
-            groups = {}
-            for curve, co in self._added:
-                groups.setdefault(curve, []).append(co)
-            if groups:
-                _with_object_mode(context, lambda _objects: [
-                    connect_points(curve, cos, self.linear, self.closed)
-                    for curve, cos in groups.items() if len(cos) > 1])
+        if event.type in {'RIGHTMOUSE', 'ESC'} and event.value == 'PRESS' and self.connect and self._added:
+            _with_object_mode(context, lambda _objects: self.finish())
         return super().modal(context, event)
+
+
+def find_segment(curve, co, exclude=-1):
+    """(spline index, segment) whose middle is at `co`, or None."""
+    best = None
+    for si, spline in enumerate(curve.splines):
+        if si == exclude or spline.type != 'BEZIER':
+            continue
+        points = _read(spline)
+        for seg in range(_segment_count(points, spline.use_cyclic_u)):
+            d = (_segment_point(curve, si, seg) - co).length
+            if d < 1e-4 and (best is None or d < best[0]):
+                best = (d, si, seg)
+    return best[1:] if best else None
 
 
 def connect_points(curve, cos, linear, closed):
@@ -692,6 +736,96 @@ class MAXIMIZE_OT_spline_unbind(Operator):
 
 
 # ------------------------------------------------------------------------------
+# Lock Handles (Alike / All): dragging one handle moves the handles of every selected vertex
+
+
+def move_locked_handles(curve, si, pi, side, delta, mode):
+    """Move handle `side` ('LEFT' / 'RIGHT') of knot (si, pi) by `delta` (local); Alike moves the
+    same side of every selected knot, All moves both sides (the other one mirrored)."""
+    moved = 0
+    for sj, spline in enumerate(curve.splines):
+        for pj, bp in enumerate(spline.bezier_points):
+            if not (bp.select_control_point or (sj, pj) == (si, pi)):
+                continue
+            bp.handle_left_type = bp.handle_right_type = 'FREE'
+            if side == 'LEFT' or mode == 'ALL':
+                bp.handle_left += delta if side == 'LEFT' else -delta
+            if side == 'RIGHT' or mode == 'ALL':
+                bp.handle_right += delta if side == 'RIGHT' else -delta
+            moved += 1
+    return moved
+
+
+class MAXIMIZE_OT_spline_lock_handles_drag(Operator):
+    """Max's Lock Handles: drag a handle of a selected vertex and the handles of all selected
+    vertices follow (Alike: the same side; All: both sides)"""
+    bl_idname = "maximize.spline_lock_handles_drag"
+    bl_label = "Move Locked Handles"
+    bl_options = {'REGISTER', 'UNDO', 'GRAB_CURSOR', 'BLOCKING'}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.edit_object
+        return (context.mode == 'EDIT_CURVE' and obj is not None and
+                obj.data.maximize_shape.lock_handles != 'NONE')
+
+    def _hit(self, context, event):
+        from bpy_extras import view3d_utils
+        region, rv3d = context.region, context.region_data
+        mouse = Vector((event.mouse_region_x, event.mouse_region_y))
+        obj = context.edit_object
+        mw = obj.matrix_world
+        best = None
+        for si, spline in enumerate(obj.data.splines):
+            for pi, bp in enumerate(spline.bezier_points):
+                if not bp.select_control_point:
+                    continue
+                for side, co in (('LEFT', bp.handle_left), ('RIGHT', bp.handle_right)):
+                    at = view3d_utils.location_3d_to_region_2d(region, rv3d, mw @ co)
+                    if at is not None and (at - mouse).length < 10 and \
+                            (best is None or (at - mouse).length < best[0]):
+                        best = ((at - mouse).length, si, pi, side, mw @ co)
+        return best
+
+    def invoke(self, context, event):
+        hit = self._hit(context, event)
+        if hit is None:
+            return {'PASS_THROUGH'}
+        _d, self._si, self._pi, self._side, self._start = hit
+        self._mode = context.edit_object.data.maximize_shape.lock_handles
+        self._mouse = (event.mouse_region_x, event.mouse_region_y)
+        self._applied = Vector()
+        context.window_manager.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
+
+    def _apply(self, context, event):
+        from bpy_extras import view3d_utils
+        region, rv3d = context.region, context.region_data
+        a = view3d_utils.region_2d_to_location_3d(region, rv3d, self._mouse, self._start)
+        b = view3d_utils.region_2d_to_location_3d(region, rv3d, (event.mouse_region_x, event.mouse_region_y),
+                                                  self._start)
+        obj = context.edit_object
+        total = obj.matrix_world.inverted_safe().to_3x3() @ (b - a)
+        step = total - self._applied
+        self._applied = total
+        _with_object_mode(context, lambda _objects: move_locked_handles(
+            obj.data, self._si, self._pi, self._side, step, self._mode))
+
+    def modal(self, context, event):
+        if event.type == 'MOUSEMOVE':
+            self._apply(context, event)
+            return {'RUNNING_MODAL'}
+        if event.type == 'LEFTMOUSE' and event.value == 'RELEASE':
+            return {'FINISHED'}
+        if event.type in {'RIGHTMOUSE', 'ESC'}:
+            obj = context.edit_object
+            _with_object_mode(context, lambda _objects: move_locked_handles(
+                obj.data, self._si, self._pi, self._side, -self._applied, self._mode))
+            return {'CANCELLED'}
+        return {'RUNNING_MODAL'}
+
+
+# ------------------------------------------------------------------------------
 # Connect Copy: Shift+drag copies of segments get connected to their originals
 
 _last_duplicate = None
@@ -961,6 +1095,9 @@ def draw_geometry_extras(layout, context, obj):
     grid.operator("maximize.spline_bind")
     grid.operator("maximize.spline_unbind")
     box.prop(p, "connect_copy")
+    row = box.row(align=True)
+    row.label(text="Lock Handles")
+    row.prop(p, "lock_handles", expand=True)
 
 
 classes = (
@@ -983,6 +1120,7 @@ classes = (
     MAXIMIZE_OT_section_create_shape,
     MAXIMIZE_OT_spline_bind,
     MAXIMIZE_OT_spline_unbind,
+    MAXIMIZE_OT_spline_lock_handles_drag,
 )
 
 
