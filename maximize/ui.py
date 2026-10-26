@@ -294,11 +294,12 @@ def _draw_poly_level(layout, context):
     # Max's caddy "Apply and Continue": run the last tool again with the same settings.
     row.operator("screen.repeat_last", text="", icon='ADD')
     grid = box.grid_flow(columns=2, even_columns=True, align=True)
+    from .caddy import tool_button
     for op in ops:
         if op == "bevel_poly":
-            grid.operator("maximize." + op, text="Bevel", translate=False)
+            tool_button(grid, context, "maximize." + op, text="Bevel", translate=False)
         else:
-            grid.operator("maximize." + op)
+            tool_button(grid, context, "maximize." + op)
     if level in {'VERTEX', 'EDGE'}:
         from .poly_tools import draw_edge_properties
         draw_edge_properties(box, level)

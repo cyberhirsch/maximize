@@ -46,6 +46,7 @@ from . import (
     max_scene,
     quad_menu,
     outliner,
+    caddy,
     ui,
 )
 
@@ -74,6 +75,7 @@ _modules = (
     max_scene,
     quad_menu,
     outliner,
+    caddy,
     ui,
 )
 

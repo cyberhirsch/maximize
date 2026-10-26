@@ -76,6 +76,16 @@ class MaximizePreferences(bpy.types.AddonPreferences):
         description="Highlight the object or sub-object under the mouse before you click, as in Max",
         default=True,
     )
+    tool_settings_style: EnumProperty(
+        name="Tool Settings",
+        description="Where a Command Panel tool's values are adjusted",
+        default='PANEL',
+        items=(
+            ('PANEL', "Adjust Last Operation", "Blender's panel in the corner of the viewport"),
+            ('CADDY', "Caddy", "Max's caddy: a settings button next to each tool opens its values at the "
+             "mouse, with OK, Apply and Continue and Cancel"),
+        ),
+    )
     first_run_done: BoolProperty(default=False, options={'HIDDEN'})
     # Max's Show Cage colors (Edit Poly > Edit Geometry).
     cage_color: FloatVectorProperty(
@@ -96,6 +106,7 @@ class MaximizePreferences(bpy.types.AddonPreferences):
         col.prop(self, "use_max_english")
         col.prop(self, "use_startup_layout")
         col.prop(self, "use_hover_highlight")
+        col.prop(self, "tool_settings_style")
         inputs = context.preferences.inputs
         col.prop(inputs, "use_rotate_around_active", text="Orbit Around Selection")
         col.prop(inputs, "use_zoom_to_mouse", text="Zoom About Mouse Point")
