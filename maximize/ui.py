@@ -8,10 +8,11 @@ import os
 
 import bpy
 import bpy.utils.previews
-from bpy.props import StringProperty
+from bpy.props import BoolProperty, EnumProperty, StringProperty
 from bpy.types import Menu, Operator, Panel
 
 from . import primitives, uvw_map
+from .shapes import EXTENDED_SPLINES, SPLINES
 from .nodes import draw_modifier_inputs
 from .preferences import draw_keymap_switch
 from .vocabulary import ALIASES
@@ -154,6 +155,7 @@ class MAXIMIZE_OT_create_in_viewport(Operator):
 
     operator: StringProperty()
     kind: StringProperty()
+    plus: BoolProperty()
 
     def invoke(self, context, _event):
         # The drag creation runs in a 3D Viewport; the button sits in the Command Panel.
@@ -165,39 +167,79 @@ class MAXIMIZE_OT_create_in_viewport(Operator):
         module, name = self.operator.split(".")
         op = getattr(getattr(bpy.ops, module), name)
         props = {"kind": self.kind} if self.kind else {}
+        if self.plus:
+            props["plus"] = True
         with context.temp_override(area=area, region=region):
             op('INVOKE_DEFAULT', **props)
         return {'FINISHED'}
 
 
-def _create_button(layout, operator, text, icon, kind=""):
+def _create_button(layout, operator, text, icon, kind="", plus=False):
     if has_command_panel():
         op = layout.operator("maximize.create_in_viewport", text=text, icon=icon)
         op.operator = operator
         op.kind = kind
+        op.plus = plus
     elif kind:
         layout.operator(operator, text=text, icon=icon).kind = kind
+    elif plus:
+        layout.operator(operator, text=text, icon=icon).plus = True
     else:
         layout.operator(operator, text=text, icon=icon)
 
 
+# Max's sub-categories: the dropdown under the category icons.
+SUBCATEGORIES = {
+    'GEOMETRY': ("maximize_geometry_types", (('STANDARD', "Standard Primitives", ""),
+                                             ('EXTENDED', "Extended Primitives", ""))),
+    'SHAPES': ("maximize_shape_types", (('SPLINES', "Splines", ""), ('EXTENDED', "Extended Splines", ""))),
+}
+
+
+def draw_subcategory(layout, context, category):
+    """Moritz's Create tab hook: the sub-category dropdown in place of the category's name."""
+    if category not in SUBCATEGORIES:
+        return False
+    layout.prop(context.window_manager, SUBCATEGORIES[category][0], text="")
+    return True
+
+
+def _kind_buttons(grid, kinds):
+    for ident in kinds:
+        _create_button(grid, "maximize.add_primitive", primitives.kind_label(ident), _KIND_ICONS[ident], ident)
+
+
+_KIND_ICONS = {kind[0]: kind[3] for kind in primitives.KINDS}
+
+
 def draw_object_types(layout, context, category):
     """Moritz's Create tab hook: Max's parametric primitives and shapes."""
-    if category == 'GEOMETRY':
-        grid = layout.grid_flow(row_major=True, columns=2, even_columns=True, align=True)
-        grid.enabled = context.mode == 'OBJECT'
-        for ident, name, _desc, icon, _num in primitives.KINDS:
-            if ident not in primitives.SHAPES:
-                _create_button(grid, "maximize.add_primitive", name, icon, ident)
-        return True
+    if category not in SUBCATEGORIES:
+        return False
+    wm = context.window_manager
+    col = layout.column()
+    col.enabled = context.mode == 'OBJECT'
+    row = col.row()
+    row.prop(context.scene, "maximize_autogrid")
     if category == 'SHAPES':
-        grid = layout.grid_flow(row_major=True, columns=2, even_columns=True, align=True)
-        grid.enabled = context.mode == 'OBJECT'
+        row.prop(wm, "maximize_start_new_shape")
+    grid = col.grid_flow(row_major=True, columns=2, even_columns=True, align=True)
+    if category == 'GEOMETRY':
+        if wm.maximize_geometry_types == 'STANDARD':
+            _kind_buttons(grid, primitives.STANDARD_PRIMITIVES)
+            _create_button(grid, "maximize.add_text", "TextPlus", 'OUTLINER_OB_FONT', plus=True)
+        else:
+            _kind_buttons(grid, primitives.EXTENDED_PRIMITIVES)
+    elif wm.maximize_shape_types == 'SPLINES':
         _create_button(grid, "maximize.line", "Line", 'IPO_LINEAR')
-        for ident, name, _desc, icon, _num in primitives.SHAPE_KINDS:
-            _create_button(grid, "maximize.add_primitive", name, icon, ident)
-        return True
-    return False
+        _kind_buttons(grid, SPLINES[:7])
+        _create_button(grid, "maximize.add_text", "Text", 'OUTLINER_OB_FONT')
+        _kind_buttons(grid, SPLINES[7:])
+        _create_button(grid, "maximize.section_plane", "Section", 'MOD_BOOLEAN')
+        _create_button(grid, "maximize.freehand", "Freehand", 'GREASEPENCIL')
+    else:
+        _kind_buttons(grid, EXTENDED_SPLINES)
+    return True
 
 
 def rollout(layout, idname, label, closed=False):
@@ -612,14 +654,31 @@ def register():
     # Moritz only: Blender's header has no hook.
     if hasattr(bpy.types.VIEW3D_HT_header, "select_mode_draw"):
         bpy.types.VIEW3D_HT_header.select_mode_draw = draw_levels
+    wm = bpy.types.WindowManager
+    for prop, items in SUBCATEGORIES.values():
+        setattr(wm, prop, EnumProperty(name="Object Type", items=items))
+    # The same ID property the AutoGrid toggle (`maximize.autogrid`) flips.
+    bpy.types.Scene.maximize_autogrid = BoolProperty(
+        name="AutoGrid", description="Create objects on the surface under the mouse")
+    wm.maximize_start_new_shape = BoolProperty(
+        name="Start New Shape", default=True,
+        description="Off: new lines are added as splines to the selected shape")
     if has_command_panel():
         bpy.types.PROPERTIES_PT_create.object_type_draw = draw_object_types
+        if hasattr(bpy.types.PROPERTIES_PT_create_category, "subcategory_draw"):
+            bpy.types.PROPERTIES_PT_create_category.subcategory_draw = draw_subcategory
 
 
 def unregister():
     global _icons
     if has_command_panel() and bpy.types.PROPERTIES_PT_create.object_type_draw is draw_object_types:
         bpy.types.PROPERTIES_PT_create.object_type_draw = None
+    if getattr(getattr(bpy.types, "PROPERTIES_PT_create_category", None), "subcategory_draw", None) is draw_subcategory:
+        bpy.types.PROPERTIES_PT_create_category.subcategory_draw = None
+    for prop, _items in SUBCATEGORIES.values():
+        delattr(bpy.types.WindowManager, prop)
+    del bpy.types.WindowManager.maximize_start_new_shape
+    del bpy.types.Scene.maximize_autogrid
     if getattr(bpy.types.VIEW3D_HT_header, "select_mode_draw", None) is draw_levels:
         bpy.types.VIEW3D_HT_header.select_mode_draw = None
     bpy.types.VIEW3D_MT_editor_menus.remove(_header_menu)

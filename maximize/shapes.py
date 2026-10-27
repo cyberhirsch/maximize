@@ -31,8 +31,17 @@ SHAPE_KINDS = (
     ('HELIX', "Helix", "", 'FORCE_VORTEX', 26),
     ('DONUT', "Donut", "", 'MESH_TORUS', 27),
     ('EGG', "Egg", "", 'MESH_UVSPHERE', 28),
+    # Extended Splines.
+    ('WRECTANGLE', "WRectangle", "", 'MESH_PLANE', 29),
+    ('CHANNEL', "Channel", "", 'MOD_SOLIDIFY', 30),
+    ('ANGLE', "Angle", "", 'MOD_SOLIDIFY', 31),
+    ('TEE', "Tee", "", 'MOD_SOLIDIFY', 32),
+    ('WIDE_FLANGE', "Wide Flange", "", 'MOD_SOLIDIFY', 33),
 )
 SHAPES = {kind[0] for kind in SHAPE_KINDS}
+# Max's Create panel: the shapes of each Shapes sub-category, in Max's order.
+SPLINES = ('RECTANGLE', 'CIRCLE', 'ELLIPSE', 'ARC', 'DONUT', 'NGON', 'STAR', 'HELIX', 'EGG')
+EXTENDED_SPLINES = ('WRECTANGLE', 'CHANNEL', 'ANGLE', 'TEE', 'WIDE_FLANGE')
 
 SHAPE_STEPS = {
     'RECTANGLE': ('RECT',),
@@ -44,6 +53,7 @@ SHAPE_STEPS = {
     'HELIX': ('RADIUS', 'HEIGHT', 'RADIUS2'),
     'DONUT': ('RADIUS', 'RADIUS2'),
     'EGG': ('RADIUS',),
+    **{kind: ('RECT',) for kind in EXTENDED_SPLINES},
 }
 
 # Max's handle length for a quarter circle, per unit radius. Fillets use it too, per unit of
@@ -139,6 +149,34 @@ def _polygon(corners, fillets, corner_handles, fillet_type):
         else:
             knots.append((co, co.copy(), co.copy(), 'FREE'))
     return (True, knots)
+
+
+def _section(kind, p):
+    """The corners and fillets of an Extended Spline's outline, counter-clockwise, centered:
+    Width along X, Length along Y, all walls Thickness thick."""
+    w, l = p.width / 2.0, p.length / 2.0
+    t = min(p.ext_thickness, p.width, p.length)
+    r1 = p.ext_corner1
+    # Sync Corner Fillets: Corner Radius 1 sets both, keeping the wall thickness.
+    r2 = max(r1 - t, 0.0) if p.ext_sync else p.ext_corner2
+    if kind == 'CHANNEL':
+        corners = ((w, l), (-w, l), (-w, -l), (w, -l), (w, t - l), (t - w, t - l), (t - w, l - t), (w, l - t))
+        fillets = (0, r1, r1, 0, 0, r2, r2, 0)
+    elif kind == 'ANGLE':
+        corners = ((-w, l), (-w, -l), (w, -l), (w, t - l), (t - w, t - l), (t - w, l))
+        edge = r2 if p.ext_edge_radii else 0.0
+        fillets = (0, r1, 0, edge, r2, edge)
+    elif kind == 'TEE':
+        h = t / 2.0
+        corners = ((-w, l), (-w, l - t), (-h, l - t), (-h, -l), (h, -l), (h, l - t), (w, l - t), (w, l))
+        fillets = (0, 0, p.corner_radius, 0, 0, p.corner_radius, 0, 0)
+    else:  # WIDE_FLANGE
+        h = t / 2.0
+        corners = ((-w, l), (-w, l - t), (-h, l - t), (-h, t - l), (-w, t - l), (-w, -l),
+                   (w, -l), (w, t - l), (h, t - l), (h, l - t), (w, l - t), (w, l))
+        r = p.corner_radius
+        fillets = (0, 0, r, r, 0, 0, 0, 0, r, r, 0, 0)
+    return [Vector((x, y, 0.0)) for x, y in corners], list(fillets)
 
 
 def _star(r1, r2, n, distortion, fillet1, fillet2):
@@ -278,6 +316,18 @@ def build_splines(p):
         if p.outline:
             splines.append(_egg_spline(p.width / 2.0, p.egg_thickness, p.egg_angle))
         return splines
+    if kind == 'WRECTANGLE':
+        t = min(p.ext_thickness, p.width / 2.0, p.length / 2.0)
+        r1 = p.ext_corner1
+        r2 = max(r1 - t, 0.0) if p.ext_sync else p.ext_corner2
+        splines = []
+        for w, l, r in ((p.width / 2.0, p.length / 2.0, r1), (p.width / 2.0 - t, p.length / 2.0 - t, r2)):
+            corners = [Vector((w, l, 0)), Vector((-w, l, 0)), Vector((-w, -l, 0)), Vector((w, -l, 0))]
+            splines.append(_polygon(corners, [r] * 4, 'THIRD', 'FREE'))
+        return splines
+    if kind in EXTENDED_SPLINES:
+        corners, fillets = _section(kind, p)
+        return [_polygon(corners, fillets, 'THIRD', 'FREE')]
     if kind == 'HELIX':
         return [_helix(p.radius1, p.radius2, p.height, p.turns, p.bias, p.direction == 'CW')]
     return []
@@ -385,6 +435,12 @@ class MaximizeShape(PropertyGroup):
     fillet1: _length("Fillet Radius 1", 0.0)
     fillet2: _length("Fillet Radius 2", 0.0)
     height: FloatProperty(name="Height", default=1.0, unit='LENGTH', update=_update)
+    ext_thickness: _length("Thickness", 0.1, "Wall thickness of the section")
+    ext_sync: BoolProperty(name="Sync Corner Fillets", update=_update,
+                           description="Corner Radius 1 rounds the inside corners too, keeping the thickness")
+    ext_corner1: _length("Corner Radius 1", 0.0, "Radius of the outside corners")
+    ext_corner2: _length("Corner Radius 2", 0.0, "Radius of the inside corners")
+    ext_edge_radii: BoolProperty(name="Edge Radii", update=_update, description="Round the ends of the legs")
     turns: FloatProperty(name="Turns", default=3.0, min=0.0, soft_max=100.0, update=_update)
     bias: FloatProperty(name="Bias", default=0.0, min=-1.0, max=1.0, update=_update)
     direction: EnumProperty(name="Direction", default='CW', update=_update, items=(
@@ -487,6 +543,19 @@ PARAMETERS = {
     'DONUT': (("Radius 1", "radius1"), ("Radius 2", "radius2")),
     'EGG': (("Length", "egg_length"), ("Width", "width"), ("Thickness", "egg_thickness"),
             ("Angle", "egg_angle"), ("Outline", "outline")),
+    'WRECTANGLE': (("Length", "length"), ("Width", "width"), ("Thickness", "ext_thickness"),
+                   ("Sync Corner Fillets", "ext_sync"), ("Corner Radius 1", "ext_corner1"),
+                   ("Corner Radius 2", "ext_corner2")),
+    'CHANNEL': (("Length", "length"), ("Width", "width"), ("Thickness", "ext_thickness"),
+                ("Sync Corner Fillets", "ext_sync"), ("Corner Radius 1", "ext_corner1"),
+                ("Corner Radius 2", "ext_corner2")),
+    'ANGLE': (("Length", "length"), ("Width", "width"), ("Thickness", "ext_thickness"),
+              ("Sync Corner Fillets", "ext_sync"), ("Corner Radius 1", "ext_corner1"),
+              ("Corner Radius 2", "ext_corner2"), ("Edge Radii", "ext_edge_radii")),
+    'TEE': (("Length", "length"), ("Width", "width"), ("Thickness", "ext_thickness"),
+            ("Corner Radius", "corner_radius")),
+    'WIDE_FLANGE': (("Length", "length"), ("Width", "width"), ("Thickness", "ext_thickness"),
+                    ("Corner Radius", "corner_radius")),
 }
 COMMON = (("Steps", "steps"), ("Optimize", "optimize"), ("Enable In Renderer", "render_renderer"),
           ("Enable In Viewport", "render_viewport"), ("Thickness", "thickness"),

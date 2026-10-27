@@ -464,6 +464,8 @@ class MAXIMIZE_OT_line(Operator):
     def invoke(self, context, _event):
         self._obj = None
         self._target = None    # Start New Shape off: the shape that gets the new spline
+        if not self.properties.is_property_set("start_new_shape"):
+            self.start_new_shape = getattr(context.window_manager, "maximize_start_new_shape", True)
         active = context.active_object
         if not self.start_new_shape and active is not None and active.type == 'CURVE' and active.select_get():
             self._target = active

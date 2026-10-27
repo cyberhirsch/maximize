@@ -17,6 +17,7 @@ from bpy_extras import view3d_utils
 from mathutils import Matrix, Vector
 from mathutils.geometry import intersect_line_plane
 
+from . import primitives_ext as ext
 from .nodes import GroupBuilder, draw_modifier_inputs, find_group, modifier_input
 from .shapes import (
     SHAPE_KINDS, SHAPE_STEPS, SHAPES, create_shape, draw_shape_parameters, shape_input, shape_kind,
@@ -32,7 +33,13 @@ KINDS = (
     ('TUBE', "Tube", "", 'MESH_CIRCLE', 4),
     ('TORUS', "Torus", "", 'MESH_TORUS', 5),
     ('PLANE', "Plane", "", 'MESH_PLANE', 6),
-) + SHAPE_KINDS
+) + ext.STANDARD_KINDS + ext.EXTENDED_KINDS + SHAPE_KINDS
+
+# Max's Create panel: the object types of each Geometry sub-category, in Max's order.
+STANDARD_PRIMITIVES = ('BOX', 'CONE', 'SPHERE', 'GEOSPHERE', 'CYLINDER', 'TUBE', 'TORUS', 'PYRAMID',
+                       'TEAPOT', 'PLANE')
+EXTENDED_PRIMITIVES = ('HEDRA', 'TORUS_KNOT', 'CHAMFERBOX', 'CHAMFERCYL', 'OILTANK', 'CAPSULE', 'SPINDLE',
+                       'L_EXT', 'GENGON', 'C_EXT', 'RINGWAVE', 'HOSE', 'PRISM')
 
 DIST = 'NodeSocketFloat'
 INT = 'NodeSocketInt'
@@ -160,6 +167,7 @@ _BUILDERS = {
     'TUBE': _build_tube,
     'TORUS': _build_torus,
     'PLANE': _build_plane,
+    **ext.BUILDERS,
 }
 
 
@@ -237,15 +245,41 @@ STEPS = {
     'CONE': ('RADIUS', 'HEIGHT', 'RADIUS2'),
     'TUBE': ('RADIUS', 'RADIUS2', 'HEIGHT'),
     'TORUS': ('RADIUS', 'RADIUS2'),
+    **ext.STEPS,
     **SHAPE_STEPS,
 }
 _RADIUS_INPUT = {'SPHERE': "Radius", 'CYLINDER': "Radius", 'CIRCLE': "Radius", 'ARC': "Radius", 'NGON': "Radius",
                  'EGG': "Width"}
-_SIZE_INPUTS = ("Width", "Length", "Radius", "Radius 1")
+
+
+def rect_inputs(kind):
+    """The (across, along) inputs a base drag sets."""
+    return ext.RECT_INPUTS.get(kind, ("Width", "Length"))
+
+
+def radius_input(kind):
+    """(input, value per dragged distance) of a radius drag."""
+    if kind in ext.RADIUS_INPUTS:
+        return ext.RADIUS_INPUTS[kind]
+    return _RADIUS_INPUT.get(kind, "Radius" if kind in ext.STEPS else "Radius 1"), 1.0
+
+
+def radius2_input(kind):
+    return ext.RADIUS2_INPUTS.get(kind, "Radius 2")
+
+
+def first_step_inputs(kind):
+    """The inputs the first drag sets: they start at zero and must grow for an object to be made."""
+    step = STEPS[kind][0]
+    if step == 'RECT':
+        return rect_inputs(kind)
+    if step == 'RADIUS':
+        return (radius_input(kind)[0],)
+    return ()
 
 
 def _create_object(context, kind, matrix):
-    name = _max_name(kind_label(kind))
+    name = _max_name(kind_label(kind).replace(" ", ""))
     if kind in SHAPES:
         obj = create_shape(context, kind, name)
     else:
@@ -403,17 +437,27 @@ class MAXIMIZE_OT_add_primitive(Operator):
         d = hit - self._p0
         if step == 'RECT':
             du, dv = d.dot(self._u), d.dot(self._v)
-            self._input("Width").value = abs(du)
-            self._input("Length").value = abs(dv)
-            self._obj.matrix_world.translation = self._p0 + self._u * (du / 2) + self._v * (dv / 2)
+            across, along = rect_inputs(self.kind)
+            self._input(across).value = abs(du)
+            self._input(along).value = abs(dv)
+            if self.kind in ext.RECT_INPUTS and self.kind != 'PYRAMID':
+                # Corner-pivot objects (L-Ext, C-Ext, Prism) grow from the first corner.
+                self._obj.matrix_world.translation = self._p0 + self._u * min(du, 0.0) + self._v * min(dv, 0.0)
+            else:
+                self._obj.matrix_world.translation = self._p0 + self._u * (du / 2) + self._v * (dv / 2)
         elif step == 'RADIUS':
-            self._input(_RADIUS_INPUT.get(self.kind, "Radius 1")).value = d.length
+            name, scale = radius_input(self.kind)
+            self._input(name).value = d.length * scale
         elif step == 'RADIUS2':
             radius = d.length
             if self.kind == 'TORUS':
                 # The second torus radius is measured from the ring, not from the center.
                 radius = abs(d.length - self._input("Radius 1").value)
-            self._input("Radius 2").value = radius
+            elif self.kind == 'RINGWAVE':
+                radius = abs(self._input("Radius").value - d.length)
+            elif self.kind == 'TORUS_KNOT':
+                radius = abs(d.length - self._input("Radius").value)
+            self._input(radius2_input(self.kind)).value = radius
 
     def _begin(self, context, event):
         self._region = self._region_at(context, event)
@@ -432,14 +476,15 @@ class MAXIMIZE_OT_add_primitive(Operator):
         basis = Matrix((self._u, self._v, self._n)).transposed().to_4x4()
         self._obj = _create_object(context, self.kind, Matrix.Translation(hit) @ basis)
         # Start the drag-sized inputs at zero so the object grows with the mouse.
-        for name in _SIZE_INPUTS + ("Height",):
-            if _has_input(self._obj, name):
-                self._input(name).value = 0.0
+        for name in first_step_inputs(self.kind) + ("Height",):
+            if 'HEIGHT' in STEPS[self.kind] or name != "Height":
+                if _has_input(self._obj, name):
+                    self._input(name).value = 0.0
         self._step = 0
         return True
 
     def _next_step(self, event):
-        if self._step == 0 and all(self._input(n).value < 1e-6 for n in _SIZE_INPUTS if _has_input(self._obj, n)):
+        if self._step == 0 and all(self._input(n).value < 1e-6 for n in first_step_inputs(self.kind)):
             # A click without a drag creates nothing.
             bpy.data.objects.remove(self._obj)
             self._obj = None
@@ -489,16 +534,89 @@ class MAXIMIZE_OT_add_primitive(Operator):
         return {'RUNNING_MODAL'}
 
 
+class MAXIMIZE_OT_add_text(Operator):
+    """Create text, as in Max: click in a viewport to place it. Text is an outline shape, TextPlus
+    filled text that can be extruded"""
+    bl_idname = "maximize.add_text"
+    bl_label = "Text"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    plus: bpy.props.BoolProperty(name="TextPlus", description="Filled text instead of an outline")
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'OBJECT'
+
+    def _create(self, context, matrix):
+        name = _max_name("TextPlus" if self.plus else "Text")
+        curve = bpy.data.curves.new(name, 'FONT')
+        curve.body = "MAX Text"
+        curve.align_x = 'CENTER'
+        # Text is a shape: outlines only. TextPlus is geometry: filled.
+        curve.fill_mode = 'BOTH' if self.plus else 'NONE'
+        obj = bpy.data.objects.new(name, curve)
+        context.collection.objects.link(obj)
+        obj.matrix_world = matrix
+        for other in context.selected_objects:
+            other.select_set(False)
+        obj.select_set(True)
+        context.view_layer.objects.active = obj
+        return obj
+
+    def execute(self, context):
+        self._create(context, context.scene.cursor.matrix)
+        return {'FINISHED'}
+
+    def invoke(self, context, _event):
+        if context.area is None or context.area.type != 'VIEW_3D':
+            return self.execute(context)
+        self._created = 0
+        context.window_manager.modal_handler_add(self)
+        context.window.cursor_modal_set('CROSSHAIR')
+        context.workspace.status_text_set("Create {:s}: click in a viewport (right-click or Esc to stop)".format(
+            "TextPlus" if self.plus else "Text"))
+        return {'RUNNING_MODAL'}
+
+    def _end(self, context):
+        context.workspace.status_text_set(None)
+        context.window.cursor_modal_restore()
+        return {'FINISHED'} if self._created else {'CANCELLED'}
+
+    def modal(self, context, event):
+        if event.type in {'RIGHTMOUSE', 'ESC'} and event.value == 'PRESS':
+            return self._end(context)
+        if event.type != 'LEFTMOUSE' or event.value != 'PRESS':
+            return {'PASS_THROUGH'} if event.type != 'MOUSEMOVE' else {'RUNNING_MODAL'}
+        region = MAXIMIZE_OT_add_primitive._region_at(self, context, event)
+        if region is None:
+            return self._end(context)
+        mouse = (event.mouse_x - region.x, event.mouse_y - region.y)
+        u, v, n = _grid_plane(region.data)
+        origin = Vector()
+        surface = autogrid_hit(context, region, mouse)
+        if surface is not None:
+            origin, u, v, n = surface
+        ray = view3d_utils.region_2d_to_origin_3d(region, region.data, mouse)
+        direction = view3d_utils.region_2d_to_vector_3d(region, region.data, mouse)
+        hit = intersect_line_plane(ray, ray + direction, origin, n)
+        if hit is not None:
+            basis = Matrix((u, v, n)).transposed().to_4x4()
+            self._create(context, Matrix.Translation(hit) @ basis)
+            self._created += 1
+        return {'RUNNING_MODAL'}
+
+
 def _entry_fields(kind):
     """(property, parameter name) pairs Keyboard Entry offers for a kind, from its creation steps."""
     fields = []
     for step in STEPS[kind]:
         if step == 'RECT':
-            fields += [("length", "Length"), ("width", "Width")]
+            across, along = rect_inputs(kind)
+            fields += [("length", along), ("width", across)]
         elif step == 'RADIUS':
-            fields.append(("radius", _RADIUS_INPUT.get(kind, "Radius 1")))
+            fields.append(("radius", radius_input(kind)[0]))
         elif step == 'RADIUS2':
-            fields.append(("radius2", "Radius 2"))
+            fields.append(("radius2", radius2_input(kind)))
         elif step == 'HEIGHT':
             fields.append(("height", "Height"))
     return fields
@@ -570,7 +688,7 @@ class MAXIMIZE_MT_create_shapes(bpy.types.Menu):
         layout.operator("maximize.line", icon='IPO_LINEAR')
         for ident, name, _desc, icon, _num in SHAPE_KINDS:
             layout.operator("maximize.add_primitive", text=name, icon=icon).kind = ident
-        layout.operator("object.text_add", text="Text", icon='OUTLINER_OB_FONT')
+        layout.operator("maximize.add_text", text="Text", icon='OUTLINER_OB_FONT')
         layout.operator("maximize.freehand", icon='GREASEPENCIL')
         layout.operator("maximize.section_plane", text="Section", icon='MOD_BOOLEAN')
         layout.operator("maximize.section", text="Section at Cursor", icon='MOD_BOOLEAN')
@@ -613,6 +731,7 @@ classes = (
     MAXIMIZE_OT_convert_spline,
     MAXIMIZE_OT_keyboard_entry,
     MAXIMIZE_OT_autogrid,
+    MAXIMIZE_OT_add_text,
 )
 
 
