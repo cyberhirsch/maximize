@@ -23,7 +23,8 @@ def modifier_input(mod, name):
 def draw_modifier_inputs(layout, mod, names=None):
     col = layout.column(align=True)
     for item in mod.node_group.interface.items_tree:
-        if item.item_type != 'SOCKET' or item.in_out != 'INPUT' or item.socket_type == 'NodeSocketGeometry':
+        # Geometry and object lists (BlobMesh's Blob Objects) have their own UI.
+        if item.item_type != 'SOCKET' or item.in_out != 'INPUT' or                 item.socket_type in {'NodeSocketGeometry', 'NodeSocketCollection'}:
             continue
         if names is None or item.name in names:
             col.prop(getattr(mod.properties.inputs, item.identifier), "value", text=item.name)

@@ -17,6 +17,7 @@ from bpy_extras import view3d_utils
 from mathutils import Matrix, Vector
 from mathutils.geometry import intersect_line_plane
 
+from . import compound
 from . import primitives_ext as ext
 from .nodes import GroupBuilder, draw_modifier_inputs, find_group, modifier_input
 from .shapes import (
@@ -33,7 +34,7 @@ KINDS = (
     ('TUBE', "Tube", "", 'MESH_CIRCLE', 4),
     ('TORUS', "Torus", "", 'MESH_TORUS', 5),
     ('PLANE', "Plane", "", 'MESH_PLANE', 6),
-) + ext.STANDARD_KINDS + ext.EXTENDED_KINDS + SHAPE_KINDS
+) + ext.STANDARD_KINDS + ext.EXTENDED_KINDS + compound.COMPOUND_KINDS + SHAPE_KINDS
 
 # Max's Create panel: the object types of each Geometry sub-category, in Max's order.
 STANDARD_PRIMITIVES = ('BOX', 'CONE', 'SPHERE', 'GEOSPHERE', 'CYLINDER', 'TUBE', 'TORUS', 'PYRAMID',
@@ -168,6 +169,7 @@ _BUILDERS = {
     'TORUS': _build_torus,
     'PLANE': _build_plane,
     **ext.BUILDERS,
+    **compound.BUILDERS,
 }
 
 
@@ -534,34 +536,13 @@ class MAXIMIZE_OT_add_primitive(Operator):
         return {'RUNNING_MODAL'}
 
 
-class MAXIMIZE_OT_add_text(Operator):
-    """Create text, as in Max: click in a viewport to place it. Text is an outline shape, TextPlus
-    filled text that can be extruded"""
-    bl_idname = "maximize.add_text"
-    bl_label = "Text"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    plus: bpy.props.BoolProperty(name="TextPlus", description="Filled text instead of an outline")
+class _ClickCreate:
+    """Create mode for objects placed with a click on the construction grid (or, with AutoGrid,
+    the surface under the mouse); subclasses define `_label` and `_create(context, matrix)`."""
 
     @classmethod
     def poll(cls, context):
         return context.mode == 'OBJECT'
-
-    def _create(self, context, matrix):
-        name = _max_name("TextPlus" if self.plus else "Text")
-        curve = bpy.data.curves.new(name, 'FONT')
-        curve.body = "MAX Text"
-        curve.align_x = 'CENTER'
-        # Text is a shape: outlines only. TextPlus is geometry: filled.
-        curve.fill_mode = 'BOTH' if self.plus else 'NONE'
-        obj = bpy.data.objects.new(name, curve)
-        context.collection.objects.link(obj)
-        obj.matrix_world = matrix
-        for other in context.selected_objects:
-            other.select_set(False)
-        obj.select_set(True)
-        context.view_layer.objects.active = obj
-        return obj
 
     def execute(self, context):
         self._create(context, context.scene.cursor.matrix)
@@ -574,7 +555,7 @@ class MAXIMIZE_OT_add_text(Operator):
         context.window_manager.modal_handler_add(self)
         context.window.cursor_modal_set('CROSSHAIR')
         context.workspace.status_text_set("Create {:s}: click in a viewport (right-click or Esc to stop)".format(
-            "TextPlus" if self.plus else "Text"))
+            self._label()))
         return {'RUNNING_MODAL'}
 
     def _end(self, context):
@@ -604,6 +585,60 @@ class MAXIMIZE_OT_add_text(Operator):
             self._create(context, Matrix.Translation(hit) @ basis)
             self._created += 1
         return {'RUNNING_MODAL'}
+
+
+class MAXIMIZE_OT_add_text(_ClickCreate, Operator):
+    """Create text, as in Max: click in a viewport to place it. Text is an outline shape, TextPlus
+    filled text that can be extruded"""
+    bl_idname = "maximize.add_text"
+    bl_label = "Text"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    plus: bpy.props.BoolProperty(name="TextPlus", description="Filled text instead of an outline")
+
+    def _label(self):
+        return "TextPlus" if self.plus else "Text"
+
+    def _create(self, context, matrix):
+        name = _max_name(self._label())
+        curve = bpy.data.curves.new(name, 'FONT')
+        curve.body = "MAX Text"
+        curve.align_x = 'CENTER'
+        # Text is a shape: outlines only. TextPlus is geometry: filled.
+        curve.fill_mode = 'BOTH' if self.plus else 'NONE'
+        obj = bpy.data.objects.new(name, curve)
+        context.collection.objects.link(obj)
+        obj.matrix_world = matrix
+        for other in context.selected_objects:
+            other.select_set(False)
+        obj.select_set(True)
+        context.view_layer.objects.active = obj
+        return obj
+
+
+class MAXIMIZE_OT_add_blobmesh(_ClickCreate, Operator):
+    """Create a BlobMesh, as in Max: click in a viewport to place it. The selected meshes become its
+    Blob Objects"""
+    bl_idname = "maximize.add_blobmesh"
+    bl_label = "BlobMesh"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def _label(self):
+        return "BlobMesh"
+
+    def _create(self, context, matrix):
+        picked = getattr(self, "_picked", None)
+        if picked is None:
+            picked = [obj.name for obj in context.selected_objects]
+        obj = _create_object(context, 'BLOBMESH', matrix)
+        compound.blob_collection(obj)
+        compound.add_blob_objects(obj, [bpy.data.objects[name] for name in picked if name in bpy.data.objects])
+        return obj
+
+    def invoke(self, context, event):
+        # The selection when the button is pressed; each click selects the new BlobMesh.
+        self._picked = [obj.name for obj in context.selected_objects]
+        return super().invoke(context, event)
 
 
 def _entry_fields(kind):
@@ -666,9 +701,10 @@ class MAXIMIZE_MT_create(bpy.types.Menu):
 
     def draw(self, _context):
         layout = self.layout
-        for ident, name, _desc, icon, _num in KINDS:
-            if ident not in SHAPES:
-                layout.operator("maximize.add_primitive", text=name, icon=icon).kind = ident
+        for ident in STANDARD_PRIMITIVES + EXTENDED_PRIMITIVES:
+            layout.operator("maximize.add_primitive", text=kind_label(ident),
+                            icon=next(k[3] for k in KINDS if k[0] == ident)).kind = ident
+        layout.operator("maximize.add_blobmesh", icon='META_BALL')
         _draw_create_options(layout)
 
 
@@ -732,7 +768,8 @@ classes = (
     MAXIMIZE_OT_keyboard_entry,
     MAXIMIZE_OT_autogrid,
     MAXIMIZE_OT_add_text,
-)
+    MAXIMIZE_OT_add_blobmesh,
+) + compound.classes
 
 
 def register():

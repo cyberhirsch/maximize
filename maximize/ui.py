@@ -11,7 +11,7 @@ import bpy.utils.previews
 from bpy.props import BoolProperty, EnumProperty, StringProperty
 from bpy.types import Menu, Operator, Panel
 
-from . import primitives, uvw_map
+from . import compound, primitives, uvw_map
 from .shapes import EXTENDED_SPLINES, SPLINES
 from .nodes import draw_modifier_inputs
 from .preferences import draw_keymap_switch
@@ -191,7 +191,8 @@ def _create_button(layout, operator, text, icon, kind="", plus=False):
 # Max's sub-categories: the dropdown under the category icons.
 SUBCATEGORIES = {
     'GEOMETRY': ("maximize_geometry_types", (('STANDARD', "Standard Primitives", ""),
-                                             ('EXTENDED', "Extended Primitives", ""))),
+                                             ('EXTENDED', "Extended Primitives", ""),
+                                             ('COMPOUND', "Compound Objects", ""))),
     'SHAPES': ("maximize_shape_types", (('SPLINES', "Splines", ""), ('EXTENDED', "Extended Splines", ""))),
 }
 
@@ -228,8 +229,10 @@ def draw_object_types(layout, context, category):
         if wm.maximize_geometry_types == 'STANDARD':
             _kind_buttons(grid, primitives.STANDARD_PRIMITIVES)
             _create_button(grid, "maximize.add_text", "TextPlus", 'OUTLINER_OB_FONT', plus=True)
-        else:
+        elif wm.maximize_geometry_types == 'EXTENDED':
             _kind_buttons(grid, primitives.EXTENDED_PRIMITIVES)
+        else:
+            _create_button(grid, "maximize.add_blobmesh", "BlobMesh", 'META_BALL')
     elif wm.maximize_shape_types == 'SPLINES':
         _create_button(grid, "maximize.line", "Line", 'IPO_LINEAR')
         _kind_buttons(grid, SPLINES[:7])
@@ -412,6 +415,8 @@ def draw_base(layout, context):
         body = rollout(layout, "mx_base_parameters", "Parameters")
         if body:
             primitives.draw_parameters(body, obj)
+            if compound.is_blobmesh(obj):
+                compound.draw_blob_objects(body, obj)
         if primitives.is_shape(obj):
             layout.operator("maximize.convert_spline", text="Convert to Editable Spline")
         layout.operator("maximize.convert_poly", text="Convert to Editable Poly")
