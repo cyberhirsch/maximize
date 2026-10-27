@@ -190,6 +190,16 @@ def primitive_modifier(obj):
     return None
 
 
+def base_entry(obj):
+    """Moritz's Modify tab hook: (modifier, label) of the base entry. A primitive's Parameters
+    modifier is the base object's own settings (hidden from the stack); the base row is named
+    after the kind ("Box"), as in Max."""
+    mod = primitive_modifier(obj)
+    kind = mod.node_group.get("maximize_kind") if mod is not None else shape_kind(obj)
+    label = next((name for ident, name, *_ in KINDS if ident == kind), None)
+    return mod, label
+
+
 def is_parametric(obj):
     """An editable primitive or shape whose parameters can still be changed."""
     return primitive_modifier(obj) is not None or shape_kind(obj) is not None
@@ -240,7 +250,11 @@ def _create_object(context, kind, matrix):
         obj = create_shape(context, kind, name)
     else:
         obj = bpy.data.objects.new(name, bpy.data.meshes.new(name))
-        obj.modifiers.new(MODIFIER_NAME, 'NODES').node_group = ensure_group(kind)
+        mod = obj.modifiers.new(MODIFIER_NAME, 'NODES')
+        mod.node_group = ensure_group(kind)
+        # The base entry is selected in the stack: its Parameters show, not the node inputs.
+        mod.show_expanded = False
+        obj.modifiers.active = None
     context.collection.objects.link(obj)
     obj.matrix_world = matrix
     for other in context.selected_objects:

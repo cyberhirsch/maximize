@@ -200,72 +200,45 @@ def draw_object_types(layout, context, category):
     return False
 
 
-def draw_modify(layout, context):
-    """Max's Modify panel below the stack: parameters, UVW Map, Selection, Edit Geometry."""
-    obj = context.active_object
-    if obj is None:
-        layout.label(text="Nothing selected")
-        return
-    if not has_command_panel():
-        layout.prop(obj, "name", text="")
-    from . import sculpt
-    sculpt.draw(layout, context, obj)
-    if obj.get("maximize_section"):
-        box = layout.box()
-        box.label(text="Section Parameters")
-        box.operator("maximize.section_create_shape")
-    if primitives.is_parametric(obj):
-        box = layout.box()
-        box.label(text="Parameters")
-        primitives.draw_parameters(box, obj)
-        if primitives.is_shape(obj):
-            layout.operator("maximize.convert_spline", text="Convert to Editable Spline")
-        layout.operator("maximize.convert_poly", text="Convert to Editable Poly")
-    if obj.type == 'CURVE':
-        from . import edit_spline
-        box = layout.box()
-        box.label(text="Edit Spline")
-        edit_spline.draw(box, context, obj)
-    if obj.type == 'CURVE' and not primitives.is_shape(obj):
-        _draw_editable_spline(layout, context, obj)
-    mod = uvw_map.uvw_modifier(obj)
-    if mod is not None:
-        box = layout.box()
-        box.label(text="UVW Map")
-        draw_modifier_inputs(box, mod)
+def rollout(layout, idname, label, closed=False):
+    """A Max rollout: a collapsible section; returns its body, or None while it is closed."""
+    header, body = layout.panel(idname, default_closed=closed)
+    header.label(text=label)
+    return body
+
+
+def draw_poly_selection(layout, context):
+    """Edit Poly's Selection rollout: the five levels, Grow / Shrink, Loop / Ring."""
+    from .selection import current_level
+    current = current_level(context) if context.mode == 'EDIT_MESH' else None
     row = layout.row(align=True)
-    row.operator_menu_enum("object.modifier_add", "type", text="Modifier List")
-    row.menu("MAXIMIZE_MT_modify", text="", icon='DOWNARROW_HLT')
-    if context.mode == 'EDIT_MESH' or (obj.type == 'MESH' and primitives.primitive_modifier(obj) is None):
-        box = layout.box()
-        box.label(text="Selection")
-        row = box.row(align=True)
-        for level in ('VERTEX', 'EDGE', 'BORDER', 'POLYGON', 'ELEMENT'):
-            row.operator("maximize.subobject", text="", **level_icon(level)).level = level
-        if context.mode == 'EDIT_MESH':
-            grid = box.grid_flow(columns=2, even_columns=True, align=True)
-            for op in ("grow", "shrink", "loop", "ring"):
-                grid.operator("maximize." + op)
-            box = layout.box()
-            box.label(text="Edit Geometry")
-            grid = box.grid_flow(columns=2, even_columns=True, align=True)
-            grid.operator("mesh.extrude_context_move", text="Extrude")
-            for op in ("bevel_poly", "chamfer", "inset", "connect", "cut", "swift_loop", "weld",
-                       "target_weld", "collapse_sub", "bridge", "cap", "remove", "detach", "quickslice",
-                       "relax", "make_planar"):
-                if op == "bevel_poly":
-                    # The Max vocabulary renames Blender's Bevel to Chamfer: keep Max's Bevel.
-                    grid.operator("maximize." + op, text="Bevel", translate=False)
-                else:
-                    grid.operator("maximize." + op)
-            row = box.row(align=True)
-            row.operator("maximize.make_planar", text="Make Planar")
-            for axis in "XYZ":
-                row.operator("maximize.make_planar_axis", text=axis).axis = axis
-            box.prop(context.scene.tool_settings, "use_transform_correct_face_attributes", text="Preserve UVs")
-            from .poly_tools import draw_extras
-            draw_extras(box, context)
-            _draw_poly_level(layout, context)
+    for level in ('VERTEX', 'EDGE', 'BORDER', 'POLYGON', 'ELEMENT'):
+        row.operator("maximize.subobject", text="", depress=current == level, **level_icon(level)).level = level
+    if context.mode == 'EDIT_MESH':
+        grid = layout.grid_flow(columns=2, even_columns=True, align=True)
+        for op in ("grow", "shrink", "loop", "ring"):
+            grid.operator("maximize." + op)
+
+
+def draw_poly_geometry(layout, context):
+    """Edit Poly's Edit Geometry rollout (Edit Mode)."""
+    grid = layout.grid_flow(columns=2, even_columns=True, align=True)
+    grid.operator("mesh.extrude_context_move", text="Extrude")
+    for op in ("bevel_poly", "chamfer", "inset", "connect", "cut", "swift_loop", "weld",
+               "target_weld", "collapse_sub", "bridge", "cap", "remove", "detach", "quickslice",
+               "relax", "make_planar"):
+        if op == "bevel_poly":
+            # The Max vocabulary renames Blender's Bevel to Chamfer: keep Max's Bevel.
+            grid.operator("maximize." + op, text="Bevel", translate=False)
+        else:
+            grid.operator("maximize." + op)
+    row = layout.row(align=True)
+    row.operator("maximize.make_planar", text="Make Planar")
+    for axis in "XYZ":
+        row.operator("maximize.make_planar_axis", text=axis).axis = axis
+    layout.prop(context.scene.tool_settings, "use_transform_correct_face_attributes", text="Preserve UVs")
+    from .poly_tools import draw_extras
+    draw_extras(layout, context)
 
 
 # Max's per-level Edit rollout: (label, operator, text) in Max's order.
@@ -282,70 +255,65 @@ _POLY_LEVEL_TOOLS = {
 }
 
 
-def _draw_poly_level(layout, context):
+def draw_poly_rollouts(layout, context, key):
+    """Edit Poly's rollouts (also Editable Poly's, at the base): Selection, and in Edit Mode Edit
+    Geometry, the level's Edit rollout and Material IDs. `key` keeps their open state apart."""
+    body = rollout(layout, key + "_selection", "Selection")
+    if body:
+        draw_poly_selection(body, context)
+    if context.mode != 'EDIT_MESH':
+        return
+    body = rollout(layout, key + "_geometry", "Edit Geometry")
+    if body:
+        draw_poly_geometry(body, context)
     from .selection import current_level
     level = current_level(context)
     if level not in _POLY_LEVEL_TOOLS:
         return
     label, ops = _POLY_LEVEL_TOOLS[level]
-    box = layout.box()
-    row = box.row()
-    row.label(text=label)
+    header, body = layout.panel(key + "_level", default_closed=False)
+    header.label(text=label)
     # Max's caddy "Apply and Continue": run the last tool again with the same settings.
-    row.operator("screen.repeat_last", text="", icon='ADD')
-    grid = box.grid_flow(columns=2, even_columns=True, align=True)
-    from .caddy import tool_button
-    for op in ops:
-        if op == "bevel_poly":
-            tool_button(grid, context, "maximize." + op, text="Bevel", translate=False)
-        else:
-            tool_button(grid, context, "maximize." + op)
-    if level in {'VERTEX', 'EDGE'}:
-        from .poly_tools import draw_edge_properties
-        draw_edge_properties(box, level)
-    overlay = getattr(context.space_data, "overlay", None)
-    if level == 'EDGE' and overlay is not None:
-        box.prop(overlay, "show_edge_sharp", text="Display Hard Edges")
+    header.operator("screen.repeat_last", text="", icon='ADD')
+    if body:
+        grid = body.grid_flow(columns=2, even_columns=True, align=True)
+        from .caddy import tool_button
+        for op in ops:
+            if op == "bevel_poly":
+                tool_button(grid, context, "maximize." + op, text="Bevel", translate=False)
+            else:
+                tool_button(grid, context, "maximize." + op)
+        if level in {'VERTEX', 'EDGE'}:
+            from .poly_tools import draw_edge_properties
+            draw_edge_properties(body, level)
+        overlay = getattr(context.space_data, "overlay", None)
+        if level == 'EDGE' and overlay is not None:
+            body.prop(overlay, "show_edge_sharp", text="Display Hard Edges")
     if level in {'POLYGON', 'ELEMENT'}:
-        from .poly_tools import draw_material_ids
-        box = layout.box()
-        box.label(text="Material IDs")
-        draw_material_ids(box, context)
+        body = rollout(layout, key + "_material_ids", "Material IDs")
+        if body:
+            from .poly_tools import draw_material_ids
+            draw_material_ids(body, context)
 
 
-def _draw_editable_spline(layout, context, obj):
-    """Max's Editable Spline rollouts: Rendering, Interpolation, Selection, Geometry."""
-    from . import spline_render
+def draw_spline_selection(layout, context):
     from .spline_tools import spline_level
-    box = layout.box()
-    box.label(text="Rendering")
-    spline_render.draw(box, obj)
-    box = layout.box()
-    box.label(text="Interpolation")
-    col = box.column(align=True)
-    col.prop(obj.data, "resolution_u", text="Steps")
-    if hasattr(obj.data, "use_optimize"):
-        col.prop(obj.data, "use_optimize", text="Optimize")
-    col.prop(obj.data.maximize_shape, "adaptive")
-    box = layout.box()
-    box.label(text="Selection")
-    row = box.row(align=True)
+    row = layout.row(align=True)
     current = spline_level(context) if context.mode == 'EDIT_CURVE' else None
     for level, label in (('VERTEX', "Vertex"), ('EDGE', "Segment"), ('BORDER', "Spline")):
         row.operator("maximize.subobject", text=label,
                      depress=current == {'VERTEX': 'VERTEX', 'EDGE': 'SEGMENT', 'BORDER': 'SPLINE'}[level]).level = level
-    if context.mode != 'EDIT_CURVE':
-        return
-    box = layout.box()
-    box.label(text="Geometry")
+
+
+def draw_spline_geometry(layout, context, obj):
     p = obj.data.maximize_shape
-    row = box.row(align=True)
+    row = layout.row(align=True)
     row.prop(p, "auto_weld")
     sub = row.row(align=True)
     sub.active = p.auto_weld
     sub.prop(p, "weld_threshold", text="Threshold")
-    box.menu("MAXIMIZE_MT_spline_vertex_type")
-    grid = box.grid_flow(columns=2, even_columns=True, align=True)
+    layout.menu("MAXIMIZE_MT_spline_vertex_type")
+    grid = layout.grid_flow(columns=2, even_columns=True, align=True)
     for idname, text in (("maximize.spline_reset_tangents", "Reset Tangents"),
                          ("maximize.spline_make_first", "Make First"), ("curve.switch_direction", "Reverse"),
                          ("maximize.spline_weld", "Weld"), ("maximize.spline_fuse", "Fuse"),
@@ -360,6 +328,82 @@ def _draw_editable_spline(layout, context, obj):
         grid.operator(idname, text=text)
     from .spline_more import draw_geometry_extras
     draw_geometry_extras(layout, context, obj)
+
+
+def draw_spline_rollouts(layout, context, obj, key, base):
+    """Editable Spline's rollouts; the Edit Spline modifier has Selection and Geometry only
+    (`base` False), the base also Rendering and Interpolation."""
+    if base:
+        body = rollout(layout, key + "_rendering", "Rendering")
+        if body:
+            from . import spline_render
+            spline_render.draw(body, obj)
+        body = rollout(layout, key + "_interpolation", "Interpolation")
+        if body:
+            col = body.column(align=True)
+            col.prop(obj.data, "resolution_u", text="Steps")
+            if hasattr(obj.data, "use_optimize"):
+                col.prop(obj.data, "use_optimize", text="Optimize")
+            col.prop(obj.data.maximize_shape, "adaptive")
+    body = rollout(layout, key + "_selection", "Selection")
+    if body:
+        draw_spline_selection(body, context)
+    if context.mode == 'EDIT_CURVE':
+        body = rollout(layout, key + "_geometry", "Geometry")
+        if body:
+            draw_spline_geometry(body, context, obj)
+
+
+def draw_base(layout, context):
+    """Moritz's Modify tab hook: the base object's settings, when the base is selected in the stack
+    (Max's Editable Poly / Editable Spline / primitive parameters)."""
+    obj = context.object
+    from . import sculpt
+    if sculpt.active_sculpt(obj) is None:
+        # Sculpting the base mesh without a Sculpt modifier.
+        sculpt.draw(layout, context, obj)
+    if obj.get("maximize_section"):
+        body = rollout(layout, "mx_base_section", "Section Parameters")
+        if body:
+            body.operator("maximize.section_create_shape")
+    if primitives.is_parametric(obj):
+        body = rollout(layout, "mx_base_parameters", "Parameters")
+        if body:
+            primitives.draw_parameters(body, obj)
+        if primitives.is_shape(obj):
+            layout.operator("maximize.convert_spline", text="Convert to Editable Spline")
+        layout.operator("maximize.convert_poly", text="Convert to Editable Poly")
+    elif obj.type == 'MESH':
+        draw_poly_rollouts(layout, context, "mx_base_poly")
+    elif obj.type == 'CURVE':
+        draw_spline_rollouts(layout, context, obj, "mx_base_spline", base=True)
+
+
+def draw_modify(layout, context):
+    """The Max sidebar tab's Modify panel (Blender without Moritz's Command Panel): the base
+    object's settings, the Edit Spline and UVW Map modifiers, and the Modifier List."""
+    obj = context.active_object
+    if obj is None:
+        layout.label(text="Nothing selected")
+        return
+    layout.prop(obj, "name", text="")
+    from . import sculpt
+    if sculpt.active_sculpt(obj) is not None:
+        sculpt.draw(layout, context, obj)
+    if obj.type == 'CURVE':
+        from . import edit_spline
+        body = rollout(layout, "mx_edit_spline", "Edit Spline")
+        if body:
+            edit_spline.draw(body, context, obj)
+    mod = uvw_map.uvw_modifier(obj)
+    if mod is not None:
+        body = rollout(layout, "mx_uvw_map", "UVW Map")
+        if body:
+            draw_modifier_inputs(body, mod)
+    row = layout.row(align=True)
+    row.operator_menu_enum("object.modifier_add", "type", text="Modifier List")
+    row.menu("MAXIMIZE_MT_modify", text="", icon='DOWNARROW_HLT')
+    draw_base(layout, context)
 
 
 class MaxPanel:
@@ -394,20 +438,62 @@ class MAXIMIZE_PT_modify(MaxPanel, Panel):
         draw_modify(self.layout, context)
 
 
-class MAXIMIZE_PT_command_modify(Panel):
-    """Moritz: Max's Modify rollouts in the Command Panel's Modify tab, below the stack"""
+class _ModifierRollouts:
+    """Moritz: Maximize's rollouts inside a modifier's own panel in the Modify tab (a header-less
+    subpanel of Blender's modifier panel; `custom_data` is the modifier)."""
     bl_space_type = 'PROPERTIES'
     bl_region_type = 'WINDOW'
     bl_context = "modifier"
-    bl_label = "Max"
-    bl_order = 1
+    bl_label = ""
+    bl_options = {'HIDE_HEADER'}
 
     @classmethod
     def poll(cls, context):
-        return has_command_panel() and context.active_object is not None
+        return has_command_panel() and context.object is not None
+
+
+class MAXIMIZE_PT_edit_poly_rollouts(_ModifierRollouts, Panel):
+    bl_parent_id = "MOD_PT_EditPoly"
 
     def draw(self, context):
-        draw_modify(self.layout, context)
+        from . import sculpt
+        obj = context.object
+        mod = self.custom_data
+        if sculpt.is_midstack(obj, mod):
+            # Maximize's mid-stack Sculpt is an Edit Poly underneath: its rollout only.
+            sculpt.draw(self.layout, context, obj, mod)
+            return
+        draw_poly_rollouts(self.layout, context, "mx_edit_poly")
+
+
+class MAXIMIZE_PT_edit_spline_rollouts(_ModifierRollouts, Panel):
+    bl_parent_id = "MOD_PT_EditSpline"
+
+    def draw(self, context):
+        from . import edit_spline
+        obj = context.object
+        edit_spline.draw(self.layout, context, obj)
+        if obj.type == 'CURVE':
+            draw_spline_rollouts(self.layout, context, obj, "mx_edit_spline", base=False)
+
+
+class MAXIMIZE_PT_sculpt_rollout(_ModifierRollouts, Panel):
+    bl_parent_id = "MOD_PT_Multires"
+
+    def draw(self, context):
+        from . import sculpt
+        obj = context.object
+        mod = self.custom_data
+        if sculpt.is_sculpt(obj, mod):
+            sculpt.draw(self.layout, context, obj, mod)
+
+
+# Parent panels that exist only in Moritz (or in every Blender, for Multires).
+_MODIFIER_ROLLOUTS = (
+    MAXIMIZE_PT_edit_poly_rollouts,
+    MAXIMIZE_PT_edit_spline_rollouts,
+    MAXIMIZE_PT_sculpt_rollout,
+)
 
 
 class MAXIMIZE_PT_hierarchy(MaxPanel, Panel):
@@ -478,7 +564,6 @@ classes = (
     MAXIMIZE_OT_create_in_viewport,
     MAXIMIZE_PT_create,
     MAXIMIZE_PT_modify,
-    MAXIMIZE_PT_command_modify,
     MAXIMIZE_PT_hierarchy,
     MAXIMIZE_PT_utilities,
     MAXIMIZE_PT_selection_sets,
@@ -499,10 +584,30 @@ def draw_levels(layout, context):
     return True
 
 
+def _draw_add_menu(self, _context):
+    """Moritz's Add Modifier menu: Maximize's own modifiers and the Max names (Modifier List)."""
+    layout = self.layout
+    layout.separator()
+    layout.operator("maximize.uvw_map", text="UVW Map")
+    _aliases(layout, 'MODIFY')
+
+
 def register():
     _load_icons()
     for cls in classes:
         bpy.utils.register_class(cls)
+    # Rollouts inside the modifiers' own panels, where the parent panel exists (Blender's modifier
+    # panels are not in bpy.types: registering fails without the parent).
+    for cls in _MODIFIER_ROLLOUTS:
+        try:
+            bpy.utils.register_class(cls)
+        except RuntimeError:
+            pass
+    if hasattr(bpy.types.DATA_PT_modifiers, "moritz_base_draw"):
+        bpy.types.DATA_PT_modifiers.moritz_base_draw = draw_base
+        bpy.types.DATA_PT_modifiers.moritz_base_entry = primitives.base_entry
+    if hasattr(bpy.types, "OBJECT_MT_modifier_add_flat"):
+        bpy.types.OBJECT_MT_modifier_add_flat.append(_draw_add_menu)
     bpy.types.VIEW3D_MT_editor_menus.append(_header_menu)
     # Moritz only: Blender's header has no hook.
     if hasattr(bpy.types.VIEW3D_HT_header, "select_mode_draw"):
@@ -518,6 +623,14 @@ def unregister():
     if getattr(bpy.types.VIEW3D_HT_header, "select_mode_draw", None) is draw_levels:
         bpy.types.VIEW3D_HT_header.select_mode_draw = None
     bpy.types.VIEW3D_MT_editor_menus.remove(_header_menu)
+    if hasattr(bpy.types, "OBJECT_MT_modifier_add_flat"):
+        bpy.types.OBJECT_MT_modifier_add_flat.remove(_draw_add_menu)
+    if getattr(bpy.types.DATA_PT_modifiers, "moritz_base_draw", None) is draw_base:
+        bpy.types.DATA_PT_modifiers.moritz_base_draw = None
+        bpy.types.DATA_PT_modifiers.moritz_base_entry = None
+    for cls in reversed(_MODIFIER_ROLLOUTS):
+        if cls.is_registered:
+            bpy.utils.unregister_class(cls)
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
     bpy.utils.previews.remove(_icons)

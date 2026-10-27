@@ -216,9 +216,9 @@ def _brush_settings(layout, context):
         row.prop(obj.data, "use_mirror_z", text="Z", toggle=True)
 
 
-def draw(layout, context, obj):
-    """The Sculpt modifier's rollout in the Modify tab."""
-    mod = active_sculpt(obj)
+def draw(layout, context, obj, mod=None):
+    """The Sculpt modifier's rollout in the Modify tab (`mod`, else the active Sculpt modifier)."""
+    mod = mod or active_sculpt(obj)
     sculpting = context.mode == 'SCULPT'
     if mod is None and not sculpting:
         return
