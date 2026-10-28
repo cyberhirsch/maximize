@@ -245,6 +245,34 @@ def draw_object_types(layout, context, category):
     return True
 
 
+# Modify panel tool buttons per row (Max's two are wider than needed in Blender's panel).
+TOOL_COLUMNS = 4
+
+
+class ToolGrid:
+    """Tool buttons TOOL_COLUMNS to a row, in order. Use it like a layout, one call per button,
+    then `pad()` so a short last row keeps the button width (Blender's grid flow drops columns
+    when fewer rows would do)."""
+
+    def __init__(self, layout):
+        self._column = layout.column(align=True)
+        self._row = None
+        self._count = 0
+
+    def _cell(self):
+        if self._count % TOOL_COLUMNS == 0:
+            self._row = self._column.row(align=True)
+        self._count += 1
+        return self._row
+
+    def __getattr__(self, name):
+        return getattr(self._cell(), name)
+
+    def pad(self):
+        while self._count % TOOL_COLUMNS:
+            self._cell().label(text="")
+
+
 def rollout(layout, idname, label, closed=False):
     """A Max rollout: a collapsible section; returns its body, or None while it is closed."""
     header, body = layout.panel(idname, default_closed=closed)
@@ -260,34 +288,37 @@ def draw_poly_selection(layout, context):
     for level in ('VERTEX', 'EDGE', 'BORDER', 'POLYGON', 'ELEMENT'):
         row.operator("maximize.subobject", text="", depress=current == level, **level_icon(level)).level = level
     if context.mode == 'EDIT_MESH':
-        # Row by row, in Max's pairs: Grow / Shrink, Loop / Ring, Dot Loop / Dot Ring.
-        grid = layout.grid_flow(row_major=True, columns=2, even_columns=True, align=True)
+        # Row by row, keeping Max's pairs together: Grow / Shrink, Loop / Ring, Dot Loop / Dot Ring.
+        grid = ToolGrid(layout)
         for op in ("grow", "shrink", "loop", "ring"):
             grid.operator("maximize." + op)
         grid.operator("maximize.dot_loop", text="Dot Loop").ring = False
         grid.operator("maximize.dot_loop", text="Dot Ring").ring = True
         for op in ("similar", "select_fill", "select_outline"):
             grid.operator("maximize." + op)
+        grid.pad()
         header, body = layout.panel("maximize_poly_select_by", default_closed=True)
         header.label(text="Select By")
         if body:
-            grid = body.grid_flow(row_major=True, columns=2, even_columns=True, align=True)
+            grid = ToolGrid(body)
             for op in ("select_nonquads", "select_open", "select_random", "select_mirror"):
                 grid.operator("maximize." + op)
+            grid.pad()
 
 
 def draw_poly_geometry(layout, context):
     """Edit Poly's Edit Geometry rollout (Edit Mode)."""
-    grid = layout.grid_flow(columns=2, even_columns=True, align=True)
+    grid = ToolGrid(layout)
     grid.operator("mesh.extrude_context_move", text="Extrude")
     for op in ("bevel_poly", "chamfer", "inset", "connect", "cut", "swift_loop", "weld",
                "target_weld", "collapse_sub", "bridge", "cap", "remove", "detach", "quickslice",
-               "relax", "make_planar"):
+               "relax"):
         if op == "bevel_poly":
             # The Max vocabulary renames Blender's Bevel to Chamfer: keep Max's Bevel.
             grid.operator("maximize." + op, text="Bevel", translate=False)
         else:
             grid.operator("maximize." + op)
+    grid.pad()
     row = layout.row(align=True)
     row.operator("maximize.make_planar", text="Make Planar")
     for axis in "XYZ":
@@ -302,9 +333,10 @@ def draw_poly_geometry(layout, context):
         header, body = layout.panel(idname, default_closed=True)
         header.label(text=label)
         if body:
-            grid = body.grid_flow(columns=2, even_columns=True, align=True)
+            grid = ToolGrid(body)
             for op in ops:
                 grid.operator("maximize." + op)
+            grid.pad()
 
 
 # Max's per-level Edit rollout: (label, operator, text) in Max's order.
@@ -342,13 +374,14 @@ def draw_poly_rollouts(layout, context, key):
     # Max's caddy "Apply and Continue": run the last tool again with the same settings.
     header.operator("screen.repeat_last", text="", icon='ADD')
     if body:
-        grid = body.grid_flow(columns=2, even_columns=True, align=True)
+        grid = ToolGrid(body)
         from .caddy import tool_button
         for op in ops:
             if op == "bevel_poly":
                 tool_button(grid, context, "maximize." + op, text="Bevel", translate=False)
             else:
                 tool_button(grid, context, "maximize." + op)
+        grid.pad()
         if level in {'VERTEX', 'EDGE'}:
             from .poly_tools import draw_edge_properties
             draw_edge_properties(body, level)
@@ -359,9 +392,10 @@ def draw_poly_rollouts(layout, context, key):
         # Max's ribbon Loops tools.
         body = rollout(layout, key + "_loops", "Loops")
         if body:
-            grid = body.grid_flow(columns=2, even_columns=True, align=True)
+            grid = ToolGrid(body)
             for op in ("insert_loop", "remove_loop"):
                 grid.operator("maximize." + op)
+            grid.pad()
     if level in {'POLYGON', 'ELEMENT'}:
         body = rollout(layout, key + "_material_ids", "Material IDs")
         if body:
@@ -390,7 +424,7 @@ def draw_spline_geometry(layout, context, obj):
     sub.active = p.auto_weld
     sub.prop(p, "weld_threshold", text="Threshold")
     layout.menu("MAXIMIZE_MT_spline_vertex_type")
-    grid = layout.grid_flow(columns=2, even_columns=True, align=True)
+    grid = ToolGrid(layout)
     for idname, text in (("maximize.spline_reset_tangents", "Reset Tangents"),
                          ("maximize.spline_make_first", "Make First"), ("curve.switch_direction", "Reverse"),
                          ("maximize.spline_weld", "Weld"), ("maximize.spline_fuse", "Fuse"),
@@ -403,6 +437,7 @@ def draw_spline_geometry(layout, context, obj):
                          ("maximize.spline_trim", "Trim"), ("maximize.spline_extend", "Extend"),
                          ("maximize.spline_level_delete", "Delete")):
         grid.operator(idname, text=text)
+    grid.pad()
     from .spline_more import draw_geometry_extras
     draw_geometry_extras(layout, context, obj)
 

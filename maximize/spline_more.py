@@ -1078,7 +1078,8 @@ def draw_geometry_extras(layout, context, obj):
     row.operator("maximize.spline_named_paste")
     box = layout.box()
     box.label(text="Geometry (more)")
-    grid = box.grid_flow(columns=2, even_columns=True, align=True)
+    from .ui import ToolGrid
+    grid = ToolGrid(box)
     grid.operator("maximize.spline_create_line")
     grid.operator("maximize.spline_insert")
     grid.operator("maximize.spline_refine")
@@ -1094,6 +1095,7 @@ def draw_geometry_extras(layout, context, obj):
     grid.operator("maximize.spline_detach_max", text="Detach...")
     grid.operator("maximize.spline_bind")
     grid.operator("maximize.spline_unbind")
+    grid.pad()
     box.prop(p, "connect_copy")
     row = box.row(align=True)
     row.label(text="Lock Handles")
