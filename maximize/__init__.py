@@ -47,6 +47,7 @@ from . import (
     quad_menu,
     outliner,
     caddy,
+    hold,
     ui,
 )
 
@@ -76,6 +77,7 @@ _modules = (
     quad_menu,
     outliner,
     caddy,
+    hold,
     ui,
 )
 

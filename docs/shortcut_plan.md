@@ -34,7 +34,7 @@ Status: ✅ done in `keymap_max.py` · 🟡 partly done · ⬜ to do.
 | Rest of Edit Poly / Editable Poly (61 rows: Shift+B soft selection, Alt+Shift+X ignore backfacing, Alt+Shift+E extrude face, Alt+N normal align…) | **Max** | Complete the table | ⬜ |
 | Quad menu on right-click | **Max** | Signature Max UI | ✅ |
 | Undo / redo, repeat last | **Max** (Ctrl+Z / Ctrl+Y, `;`) with Ctrl+Shift+Z still redoing outside the viewport | Ctrl+Y is the Windows standard too | ✅ |
-| Hold / Fetch (Ctrl+H / Ctrl+Alt+F) | **Max** | Cheap to build: save and reload a temporary file | ⬜ |
+| Hold / Fetch (Ctrl+H / Ctrl+Alt+F) | **Max** | A copy in the temp folder that remembers the open file; Fetch asks, then loads it (Edit menu too) | ✅ |
 | Undo / redo viewport change (Shift+Z / Shift+Y) | **Max** | Blender has view history only partly; needs a small operator | ✅ |
 | Render (F9, F10, Shift+Q) | **Max** | Daily use | ✅ |
 | Timeline and playback (`/` play, `,` `.` frames, Home/End, K set key, N auto key) | **Max**, plus Space = play | Max has no Space binding in the viewport except the quad-menu lock, so Space can keep Play like Maya, Unreal and Blender | ✅ |

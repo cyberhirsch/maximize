@@ -224,6 +224,10 @@ def apply(km, moritz=False, maya_navigation=False):
     # Global: undo/redo, repeat, render, animation.
     km.bind("Screen", "ed.redo", _event('Y', ctrl=True, repeat=True))
     km.bind("Screen", "screen.repeat_last", _event('SEMI_COLON'))
+    # Hold / Fetch, everywhere but editors with their own Ctrl+H (the Text Editor's Replace).
+    for idname, ev in (("maximize.hold", _event('H', ctrl=True)), ("maximize.fetch", _event('F', ctrl=True, alt=True))):
+        km.strip(ev, VIEWPORT_KEYMAPS)
+        km.bind("Window", idname, ev)
     km.bind("Screen Editing", "render.render", _event('F9'), {"use_viewport": True})
     km.bind("Screen Editing", "render.render", _event('Q', shift=True), {"use_viewport": True})
     km.bind("Screen Editing", "maximize.render_setup", _event('F10'))
