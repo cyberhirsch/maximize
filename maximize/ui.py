@@ -393,7 +393,7 @@ def draw_poly_rollouts(layout, context, key):
         body = rollout(layout, key + "_loops", "Loops")
         if body:
             grid = ToolGrid(body)
-            for op in ("insert_loop", "remove_loop"):
+            for op in ("insert_loop", "remove_loop", "set_flow"):
                 grid.operator("maximize." + op)
             grid.pad()
     if level in {'POLYGON', 'ELEMENT'}:

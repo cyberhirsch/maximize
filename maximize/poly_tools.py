@@ -1169,7 +1169,83 @@ class MAXIMIZE_OT_remove_loop(_EditMesh, Operator):
         return {'FINISHED'}
 
 
+def _opposite(edge, vert):
+    """The edge across `vert` from `edge` in the edge loop (one that shares no polygon with it), or None
+    where the loop stops: at a pole or the mesh border."""
+    if len(vert.link_edges) != 4:
+        return None
+    faces = set(edge.link_faces)
+    across = [e for e in vert.link_edges if e is not edge and not faces.intersection(e.link_faces)]
+    return across[0] if len(across) == 1 else None
+
+
+def _slope(prev, co, nxt):
+    """The tangent at `co` (per unit of length) of the parabola through three uneven points."""
+    h1, h2 = (co - prev).length, (nxt - co).length
+    if h1 < 1e-9 or h2 < 1e-9:
+        return (nxt - prev) / max(h1 + h2, 1e-9)
+    return (h1 * h1 * (nxt - co) + h2 * h2 * (co - prev)) / (h1 * h2 * (h1 + h2))
+
+
+def _flow_target(vert, selected):
+    """Where Set Flow puts `vert`: on a curve through the vertices on both sides of the selected loop
+    and the ones beyond them, at the same place between its two neighbours. None where the mesh
+    doesn't say (no clear crossing loop)."""
+    across = set(filter(None, (_opposite(e, vert) for e in vert.link_edges if e in selected)))
+    sides = [e for e in vert.link_edges if e not in selected and e not in across]
+    if len(sides) != 2:
+        return None
+    ends = []
+    for side in sides:
+        near = side.other_vert(vert)
+        beyond = _opposite(side, near)
+        ends.append((near.co, beyond.other_vert(near).co if beyond is not None else None))
+    (a, a2), (b, b2) = ends
+    if a2 is None:
+        a2 = 2.0 * a - b
+    if b2 is None:
+        b2 = 2.0 * b - a
+    ab = b - a
+    if ab.length_squared < 1e-12:
+        return None
+    t = min(max((vert.co - a).dot(ab) / ab.length_squared, 0.0), 1.0)
+    # A Hermite curve between the two neighbours, its tangents from the spacing of the vertices on
+    # either side (the selected vertex makes the middle gap about twice the others).
+    ta, tb = _slope(a2, a, b) * ab.length, _slope(a, b, b2) * ab.length
+    t2, t3 = t * t, t * t * t
+    return ((2 * t3 - 3 * t2 + 1) * a + (t3 - 2 * t2 + t) * ta + (-2 * t3 + 3 * t2) * b + (t3 - t2) * tb)
+
+
+class MAXIMIZE_OT_set_flow(_EditMesh, Operator):
+    """Set Flow: move the vertices of the selected edges onto the curve of the surrounding surface"""
+    bl_idname = "maximize.set_flow"
+    bl_label = "Set Flow"
+
+    amount: FloatProperty(name="Amount", default=1.0, min=0.0, max=1.0, subtype='FACTOR',
+                          description="How far the vertices move towards the curve")
+    auto_loop: BoolProperty(name="Auto Loop", description="Work on the whole loops of the selected edges")
+
+    def execute(self, context):
+        if not _edges_selected(context):
+            self.report({'WARNING'}, "Select edges first")
+            return {'CANCELLED'}
+        if self.auto_loop:
+            bpy.ops.mesh.select_edge_loop_multi()
+        for obj in _edit_meshes(context):
+            bm = bmesh.from_edit_mesh(obj.data)
+            selected = {e for e in bm.edges if e.select and not e.hide}
+            verts = {v for e in selected for v in e.verts}
+            # All from the shape as it was, so the order doesn't matter.
+            targets = [(v, _flow_target(v, selected)) for v in verts]
+            for v, co in targets:
+                if co is not None:
+                    v.co = v.co.lerp(co, self.amount)
+            bmesh.update_edit_mesh(obj.data, loop_triangles=True, destructive=False)
+        return {'FINISHED'}
+
+
 classes = (
+    MAXIMIZE_OT_set_flow,
     MAXIMIZE_OT_quadrify_all,
     MAXIMIZE_OT_dot_loop,
     MAXIMIZE_OT_insert_loop,
