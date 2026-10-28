@@ -107,6 +107,7 @@ select_face((0, 0, 1))
 result, s = run(1.5)
 # Two boxes of 8, joined by a 2 x 2 x 1 bridge (the rest of the extrusion is inside the top box).
 check(s["open"] == 0 and abs(s["volume"] - 20.0) < 1e-3, "merge: volume 20, got {}".format(s))
+check(s["faces"] == 14 and s["ngons"] == 0, "merge with flush walls: 14 quads, no stray edges, got {}".format(s))
 
 # Out with nothing in the way leaves quads: no boolean on a plain extrude.
 cube(cuts=2)

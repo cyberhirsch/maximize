@@ -14,11 +14,12 @@ let go, as one undo step.
 
 import bmesh
 import bpy
-from bpy.props import BoolProperty, FloatProperty
+from bpy.props import BoolProperty, FloatProperty, FloatVectorProperty
 from bpy.types import Operator
 from bpy_extras import view3d_utils
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
+from mathutils.kdtree import KDTree
 
 # The extruded shape starts this much (of the mesh size) outside the surface, so its base doesn't lie
 # in the faces it cuts.
@@ -130,6 +131,47 @@ def _cap_plane(faces, offset):
     return center + offset, offset.normalized()
 
 
+def _on_segment(point, a, b, tolerance):
+    ab = b - a
+    t = (point - a).dot(ab) / max(ab.length_squared, 1e-18)
+    return -1e-6 <= t <= 1.0 + 1e-6 and (a + ab * t - point).length < tolerance
+
+
+def _clean_up(bm, old_edges, old_verts, tolerance):
+    """After the boolean: weld the slivers the skin leaves, and dissolve the flat edges the boolean
+    added (where walls lie flush with the mesh), keeping the mesh's own edges."""
+    tree = KDTree(len(old_verts))
+    for i, co in enumerate(old_verts):
+        tree.insert(co, i)
+    tree.balance()
+    new = [v for v in bm.verts if not old_verts or tree.find(v.co)[2] > tolerance * 0.01]
+    if new:
+        near = KDTree(len(bm.verts))
+        for v in bm.verts:
+            near.insert(v.co, v.index)
+        near.balance()
+        bm.verts.ensure_lookup_table()
+        weld = {bm.verts[i] for v in new for _co, i, _d in near.find_range(v.co, tolerance)}
+        bmesh.ops.remove_doubles(bm, verts=list(weld), dist=tolerance)
+        # Back onto the mesh's own points (the weld can land between the two).
+        for v in bm.verts:
+            if v.is_valid and old_verts:
+                co, _i, d = tree.find(v.co)
+                if d < tolerance:
+                    v.co = co
+    flat = []
+    for e in bm.edges:
+        faces = e.link_faces
+        if len(faces) != 2 or faces[0].normal.dot(faces[1].normal) < 1.0 - 1e-6:
+            continue
+        a, b = e.verts[0].co, e.verts[1].co
+        if any(_on_segment(a, p, q, tolerance) and _on_segment(b, p, q, tolerance) for p, q in old_edges):
+            continue
+        flat.append(e)
+    if flat:
+        bmesh.ops.dissolve_edges(bm, edges=flat, use_verts=True)
+
+
 def smart_extrude(obj, offset):
     """Extrude the selected polygons of `obj` (in Edit Mode) by `offset`. Returns 'PLAIN', 'CUT',
     'MERGE' or None (nothing selected)."""
@@ -145,6 +187,8 @@ def smart_extrude(obj, offset):
     cap_point, cap_normal = _cap_plane(faces, offset)
     skin = _size(bm) * _SKIN
     back = -offset.normalized() * skin
+    old_edges = [(e.verts[0].co.copy(), e.verts[1].co.copy()) for e in bm.edges if not e.hide]
+    old_verts = [v.co.copy() for v in bm.verts]
     footprint = _footprint(faces)
     # The extruded shape as a closed solid of its own: the faces copied, moved a little back out of
     # the surface, and extruded past the original by `offset`.
@@ -179,6 +223,8 @@ def smart_extrude(obj, offset):
         wrong = [f for f in bm.faces if cut_away(f.calc_center_median() - f.normal * step)
                  and not cut_away(f.calc_center_median() + f.normal * step)]
         bmesh.ops.reverse_faces(bm, faces=wrong)
+    bm.verts.index_update()
+    _clean_up(bm, old_edges, old_verts, skin * 30.0)
     # Max leaves the extruded polygons selected: those on the cap's plane.
     tolerance = skin * 10.0
     for f in bm.faces:
@@ -201,6 +247,8 @@ class MAXIMIZE_OT_smart_extrude(Operator):
                             description="How far along the normal (negative goes into the mesh)")
     release_confirm: BoolProperty(name="Confirm on Release", options={'HIDDEN', 'SKIP_SAVE'},
                                   description="Releasing the mouse button ends the drag")
+    offset: FloatVectorProperty(name="Offset", subtype='TRANSLATION', options={'SKIP_SAVE'},
+                                description="Extrude by this move instead of along the normal (Shift+drag)")
 
     @classmethod
     def poll(cls, context):
@@ -214,7 +262,10 @@ class MAXIMIZE_OT_smart_extrude(Operator):
         if not faces:
             self.report({'WARNING'}, "Select polygons first")
             return {'CANCELLED'}
-        result = smart_extrude(obj, _direction(faces) * self.distance)
+        offset = Vector(self.offset)
+        if offset.length < 1e-9:
+            offset = _direction(faces) * self.distance
+        result = smart_extrude(obj, offset)
         return {'FINISHED'} if result else {'CANCELLED'}
 
     def invoke(self, context, event):
@@ -285,11 +336,57 @@ class MAXIMIZE_OT_smart_extrude(Operator):
 _MOVE_TOOLS = {"builtin.move", "builtin.transform"}
 
 
+_pending_drag = None
+
+
+def _watch_drag():
+    """Timer: once the Move of the preview extrusion ends, turn the move into a Smart Extrude."""
+    global _pending_drag
+    if _pending_drag is None:
+        return None
+    window, area, obj, before, index, start, ticks = _pending_drag
+    try:
+        running = any(op.bl_idname.startswith(("TRANSFORM_OT_", "GIZMOGROUP_OT_")) for op in window.modal_operators)
+    except ReferenceError:
+        _pending_drag = None
+        return None
+    if running or ticks < 2:
+        _pending_drag = (window, area, obj, before, index, start, ticks + 1)
+        return 0.05
+    _pending_drag = None
+    try:
+        if obj.mode != 'EDIT':
+            raise ReferenceError
+        bm = bmesh.from_edit_mesh(obj.data)
+        bm.verts.ensure_lookup_table()
+        offset = bm.verts[index].co - start if index < len(bm.verts) else Vector()
+    except ReferenceError:
+        bpy.data.meshes.remove(before)
+        return None
+    region = next((r for r in area.regions if r.type == 'WINDOW'), None)
+    with bpy.context.temp_override(window=window, area=area, region=region):
+        if offset.length > 1e-6:
+            # The Move made an undo step with the preview in it: step back over it (to the mesh as it
+            # was, the preview itself made none), so one undo takes the whole Smart Extrude away.
+            bpy.ops.ed.undo()
+        bm = bmesh.from_edit_mesh(obj.data)
+        if len(bm.verts) != len(before.vertices) or len(bm.faces) != len(before.polygons):
+            bm.clear()
+            bm.from_mesh(before)
+            bmesh.update_edit_mesh(obj.data)
+        if offset.length > 1e-6:
+            bpy.ops.maximize.smart_extrude('EXEC_DEFAULT', offset=offset)
+    bpy.data.meshes.remove(before)
+    return None
+
+
 class MAXIMIZE_OT_smart_extrude_drag(Operator):
-    """Shift+drag of polygons with the Move tool: Smart Extrude, as in Max"""
+    """Shift+drag of polygons with the Move tool: Smart Extrude along the move, as in Max"""
     bl_idname = "maximize.smart_extrude_drag"
     bl_label = "Smart Extrude (Shift+Drag)"
     bl_options = {'INTERNAL'}
+
+    gizmo: BoolProperty(options={'HIDDEN', 'SKIP_SAVE'}, description="Started on a gizmo handle")
 
     @classmethod
     def poll(cls, context):
@@ -302,9 +399,27 @@ class MAXIMIZE_OT_smart_extrude_drag(Operator):
         return tool is not None and tool.idname in _MOVE_TOOLS
 
     def invoke(self, context, _event):
-        # The button is still down: letting go of it ends the extrusion.
-        result = bpy.ops.maximize.smart_extrude('INVOKE_DEFAULT', release_confirm=True)
-        return {'FINISHED'} if 'RUNNING_MODAL' in result or 'FINISHED' in result else {'CANCELLED'}
+        global _pending_drag
+        obj = context.edit_object
+        bm = bmesh.from_edit_mesh(obj.data)
+        faces = _selected_faces(bm)
+        if not faces:
+            return {'CANCELLED'}
+        before = bpy.data.meshes.new("Smart Extrude")
+        bm.to_mesh(before)
+        # A plain extrusion for the Move to drag (the gizmo's axis, X / Y / Z, snapping); when the
+        # Move ends, the mesh goes back and Smart Extrude runs with the move.
+        _plain_extrude(bm, faces, Vector())
+        bm.verts.index_update()
+        moving = next(v for f in bm.faces if f.select for v in f.verts)
+        bmesh.update_edit_mesh(obj.data)
+        _pending_drag = (context.window, context.area, obj, before, moving.index, moving.co.copy(), 0)
+        bpy.app.timers.register(_watch_drag, first_interval=0.05)
+        if self.gizmo:
+            # The next keymap item starts the gizmo's drag on the extrusion.
+            return {'PASS_THROUGH'}
+        bpy.ops.transform.translate('INVOKE_DEFAULT', release_confirm=True)
+        return {'FINISHED'}
 
 
 classes = (
