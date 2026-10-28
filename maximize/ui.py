@@ -640,11 +640,22 @@ class MAXIMIZE_PT_sculpt_rollout(_ModifierRollouts, Panel):
             sculpt.draw(self.layout, context, obj, mod)
 
 
-# Parent panels that exist only in Moritz (or in every Blender, for Multires).
+class MAXIMIZE_PT_freeform_rollout(_ModifierRollouts, Panel):
+    bl_parent_id = "MOD_PT_GeometryNodes"
+
+    def draw(self, context):
+        from . import freeform
+        mod = self.custom_data
+        if mod is not None and mod == freeform.freeform_modifier(context.object):
+            freeform.draw(self.layout, context, context.object, mod)
+
+
+# Parent panels that exist only in Moritz (or in every Blender, for Multires and Geometry Nodes).
 _MODIFIER_ROLLOUTS = (
     MAXIMIZE_PT_edit_poly_rollouts,
     MAXIMIZE_PT_edit_spline_rollouts,
     MAXIMIZE_PT_sculpt_rollout,
+    MAXIMIZE_PT_freeform_rollout,
 )
 
 
