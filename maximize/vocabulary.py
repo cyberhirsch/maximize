@@ -92,6 +92,10 @@ ALIASES = (
      "Collapse each selected group of elements to a single vertex"),
     ("swift_loop", "Swift Loop", "mesh.loopcut_slide", {}, 'POLY', "Insert an edge loop and slide it"),
     ("cut", "Cut", "mesh.knife_tool", {}, 'POLY', "Cut new edges across polygons"),
+    ("paint_connect", "Paint Connect", "mesh.knife_tool", {"use_occlude_geometry": True}, 'POLY',
+     "Draw across polygons to connect their edges (Blender's Knife: Ctrl snaps to edge middles, Enter ends)"),
+    ("build_corner", "Build Corner", "mesh.edge_rotate", {"use_ccw": False}, 'POLY',
+     "Turn the selected edges inside their two polygons, so the edge loop turns a corner"),
     ("quickslice", "QuickSlice", "mesh.bisect", {}, 'POLY', "Slice the selection with a plane"),
     ("bridge", "Bridge", "mesh.bridge_edge_loops", {}, 'POLY', "Connect two borders or edge loops with polygons"),
     ("detach", "Detach", "mesh.separate", {"type": 'SELECTED'}, 'POLY', "Detach the selection to a new object"),
@@ -159,6 +163,29 @@ ALIASES = (
 )
 
 
+def view3d_override(context):
+    """Context for the biggest 3D View of the window (for viewport tools run from a panel button),
+    or None."""
+    window = context.window
+    screen = window.screen if window else None
+    if screen is None:
+        return None
+    from .viewport import active_view_region
+    active = active_view_region(window)
+    if active is not None:
+        return {"window": window, "area": active[0], "region": active[1]}
+    areas = [a for a in screen.areas if a.type == 'VIEW_3D']
+    if not areas:
+        return None
+    area = max(areas, key=lambda a: a.width * a.height)
+    # In a four-view layout, the main (user) view.
+    main = area.spaces.active.region_3d
+    regions = [r for r in area.regions if r.type == 'WINDOW']
+    region = next((r for r in regions if r.data is not None and main is not None and
+                   r.data.as_pointer() == main.as_pointer()), regions[0] if regions else None)
+    return {"window": window, "area": area, "region": region} if region else None
+
+
 def _alias_class(ident, label, target, props, description):
     module, name = target.split(".")
 
@@ -168,14 +195,30 @@ def _alias_class(ident, label, target, props, description):
     def finished(result):
         return {'FINISHED'} if result & {'FINISHED', 'RUNNING_MODAL'} else {'CANCELLED'}
 
-    def poll(cls, _context):
-        return target_op().poll()
+    def run(context, mode):
+        op = target_op()
+        if not op.poll():
+            # From a panel button: a viewport tool (Cut, Paint Connect) runs in the 3D View.
+            override = view3d_override(context)
+            if override is not None:
+                with context.temp_override(**override):
+                    return finished(op(mode, **props))
+        return finished(op(mode, **props))
 
-    def invoke(self, _context, _event):
-        return finished(target_op()('INVOKE_DEFAULT', **props))
+    def poll(cls, context):
+        if target_op().poll():
+            return True
+        override = view3d_override(context)
+        if override is None:
+            return False
+        with context.temp_override(**override):
+            return target_op().poll()
 
-    def execute(self, _context):
-        return finished(target_op()('EXEC_DEFAULT', **props))
+    def invoke(self, context, _event):
+        return run(context, 'INVOKE_DEFAULT')
+
+    def execute(self, context):
+        return run(context, 'EXEC_DEFAULT')
 
     return type("MAXIMIZE_OT_" + ident, (Operator,), {
         "bl_idname": "maximize." + ident,

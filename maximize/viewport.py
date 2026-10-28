@@ -256,6 +256,20 @@ def _select_max_tab():
 
 _HISTORY_SIZE = 50
 _view_history = {}  # region_3d pointer -> {"states": [...], "index": int, "restoring": bool}
+# Max's active viewport, as far as Python can tell: the one whose view changed last.
+_active_view = None  # region_3d pointer
+
+
+def active_view_region(window):
+    """(area, region) of the active viewport in `window`: the one changed last, else None."""
+    if _active_view is None or window is None:
+        return None
+    for area in window.screen.areas:
+        if area.type == 'VIEW_3D':
+            for region in area.regions:
+                if region.type == 'WINDOW' and region.data is not None and                         region.data.as_pointer() == _active_view:
+                    return area, region
+    return None
 
 
 def _view_state(rv3d):
@@ -273,6 +287,7 @@ def _set_view_state(rv3d, state):
 
 
 def _track_views():
+    global _active_view
     try:
         windows = bpy.context.window_manager.windows
     except AttributeError:
@@ -288,6 +303,7 @@ def _track_views():
                 state = _view_state(rv3d)
                 entry = _view_history.setdefault(rv3d.as_pointer(), {"states": [state], "index": 0})
                 if entry["states"][entry["index"]] != state:
+                    _active_view = rv3d.as_pointer()
                     del entry["states"][entry["index"] + 1:]
                     entry["states"].append(state)
                     del entry["states"][:-_HISTORY_SIZE]

@@ -301,12 +301,25 @@ def draw_poly_selection(layout, context):
         grid.operator("maximize.dot_loop", text="Dot Ring").ring = True
         for op in ("similar", "select_fill", "select_outline"):
             grid.operator("maximize." + op)
+        # Max's ribbon: one step at a time along loops and rings, and Random Loops.
+        for text, action, ring in (("Grow Loop", 'GROW', False), ("Shrink Loop", 'SHRINK', False),
+                                   ("Grow Ring", 'GROW', True), ("Shrink Ring", 'SHRINK', True)):
+            props = grid.operator("maximize.step_loop", text=text)
+            props.action, props.ring = action, ring
+        grid.operator("maximize.random_loops")
         grid.pad()
+        # Loop / Ring mode: a click picks the whole loop or ring.
+        layout.row(align=True).prop(context.window_manager, "maximize_click_mode", expand=True)
         header, body = layout.panel("maximize_poly_select_by", default_closed=True)
         header.label(text="Select By")
         if body:
             grid = ToolGrid(body)
             for op in ("select_nonquads", "select_open", "select_random", "select_mirror"):
+                grid.operator("maximize." + op)
+            for side in ('TOP', 'BOTTOM', 'LEFT', 'RIGHT'):
+                grid.operator("maximize.select_side", text=side.title()).side = side
+            for op in ("select_half", "select_perspective", "select_by_view", "select_pivot_distance",
+                       "select_numeric"):
                 grid.operator("maximize." + op)
             grid.pad()
 
@@ -315,7 +328,7 @@ def draw_poly_geometry(layout, context):
     """Edit Poly's Edit Geometry rollout (Edit Mode)."""
     grid = ToolGrid(layout)
     grid.operator("mesh.extrude_context_move", text="Extrude")
-    for op in ("bevel_poly", "chamfer", "inset", "connect", "cut", "swift_loop", "weld",
+    for op in ("bevel_poly", "chamfer", "inset", "connect", "cut", "paint_connect", "swift_loop", "weld",
                "target_weld", "collapse_sub", "bridge", "cap", "remove", "detach", "quickslice",
                "relax"):
         if op == "bevel_poly":
@@ -328,6 +341,9 @@ def draw_poly_geometry(layout, context):
     row.operator("maximize.make_planar", text="Make Planar")
     for axis in "XYZ":
         row.operator("maximize.make_planar_axis", text=axis).axis = axis
+    row = layout.row(align=True)
+    row.operator("maximize.align_to", text="To View").target = 'VIEW'
+    row.operator("maximize.align_to", text="To Grid").target = 'GRID'
     layout.prop(context.scene.tool_settings, "use_transform_correct_face_attributes", text="Preserve UVs")
     from .poly_tools import draw_extras
     draw_extras(layout, context)
@@ -342,6 +358,13 @@ def draw_poly_geometry(layout, context):
             for op in ops:
                 grid.operator("maximize." + op)
             grid.pad()
+            if idname == "maximize_poly_geometry_all":
+                # Max's ribbon Modify Mode: up and down the modifier stack.
+                row = body.row(align=True)
+                row.operator("maximize.modifier_step", text="Previous Modifier", icon='TRIA_DOWN').direction = 'PREVIOUS'
+                row.operator("maximize.modifier_step", text="Next Modifier", icon='TRIA_UP').direction = 'NEXT'
+            else:
+                body.operator_menu_enum("maximize.generate_topology", "pattern", text="Generate Topology")
 
 
 # Max's per-level Edit rollout: (label, operator, text) in Max's order.
@@ -352,7 +375,8 @@ _POLY_LEVEL_TOOLS = {
                             "create_shape", "turn", "hard", "smooth_edges")),
     'BORDER': ("Edit Borders", ("extrude_max", "insert_vertex", "cap", "bridge", "chamfer", "connect", "create_shape")),
     'POLYGON': ("Edit Polygons", ("smart_extrude", "bevel_poly", "inset", "outline", "bridge", "flip", "turn",
-                                  "select_by_angle", "create_poly", "hinge_from_edge", "extrude_along_spline")),
+                                  "select_by_angle", "create_poly", "geopoly", "hinge_from_edge",
+                                  "extrude_along_spline")),
     'ELEMENT': ("Edit Elements", ("flip", "create_poly")),
 }
 
@@ -398,12 +422,13 @@ def draw_poly_rollouts(layout, context, key):
         overlay = getattr(context.space_data, "overlay", None)
         if level == 'EDGE' and overlay is not None:
             body.prop(overlay, "show_edge_sharp", text="Display Hard Edges")
-    if level == 'EDGE':
-        # Max's ribbon Loops tools.
+    if level in {'VERTEX', 'EDGE'}:
+        # Max's ribbon Loops tools (Build End picks two vertices).
         body = rollout(layout, key + "_loops", "Loops")
         if body:
             grid = ToolGrid(body)
-            for op in ("insert_loop", "remove_loop", "set_flow"):
+            for op in ("insert_loop", "remove_loop", "set_flow", "build_end", "build_corner", "distribute",
+                       "center_loop", "loop_straighten", "loop_circle", "loop_curve"):
                 grid.operator("maximize." + op)
             grid.pad()
     if level in {'POLYGON', 'ELEMENT'}:
