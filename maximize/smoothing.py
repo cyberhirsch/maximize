@@ -10,6 +10,8 @@ sharp edges and flat faces whenever the groups change, so rendering, exporting (
 sharp edges, which Max reads back as smoothing) and stock Blender all see the result.
 """
 
+import math
+
 import bmesh
 import bpy
 from bpy.props import FloatProperty, IntProperty
@@ -257,18 +259,27 @@ class MAXIMIZE_PT_smoothing(Panel):
         return context.mode == 'EDIT_MESH' and context.tool_settings.mesh_select_mode[2]
 
     def draw(self, context):
-        layout = self.layout
-        all_mask, any_mask = selection_groups(context)
-        grid = layout.grid_flow(row_major=True, columns=8, even_columns=True, align=True)
-        for group in range(1, 33):
-            bit = 1 << (group - 1)
-            depress = bool(all_mask & bit)
-            text = str(group) if not (any_mask & bit and not depress) else str(group) + "·"
-            grid.operator("maximize.smoothing_group", text=text, depress=depress).group = group
-        row = layout.row(align=True)
-        row.operator("maximize.smoothing_clear")
-        row.operator("maximize.smoothing_auto")
-        layout.operator("maximize.smoothing_from_sharp")
+        draw_smoothing_groups(self.layout, context)
+
+
+def draw_smoothing_groups(layout, context):
+    """Max's Polygon: Smoothing Groups: the 32 groups, then Max's ribbon Smooth / Smooth 30 / Hard."""
+    all_mask, any_mask = selection_groups(context)
+    grid = layout.grid_flow(row_major=True, columns=8, even_columns=True, align=True)
+    for group in range(1, 33):
+        bit = 1 << (group - 1)
+        depress = bool(all_mask & bit)
+        text = str(group) if not (any_mask & bit and not depress) else str(group) + "·"
+        grid.operator("maximize.smoothing_group", text=text, depress=depress).group = group
+    row = layout.row(align=True)
+    row.operator("maximize.smoothing_clear")
+    row.operator("maximize.smoothing_auto")
+    layout.operator("maximize.smoothing_from_sharp")
+    # Max's ribbon: Smooth (one group across), Smooth 30 (Auto Smooth at 30 degrees), Hard (none).
+    row = layout.row(align=True)
+    row.operator("maximize.smoothing_auto", text="Smooth").angle = math.pi
+    row.operator("maximize.smoothing_auto", text="Smooth 30").angle = math.radians(30.0)
+    row.operator("maximize.smoothing_clear", text="Hard")
 
 
 classes = (

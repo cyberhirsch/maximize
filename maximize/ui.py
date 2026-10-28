@@ -260,9 +260,20 @@ def draw_poly_selection(layout, context):
     for level in ('VERTEX', 'EDGE', 'BORDER', 'POLYGON', 'ELEMENT'):
         row.operator("maximize.subobject", text="", depress=current == level, **level_icon(level)).level = level
     if context.mode == 'EDIT_MESH':
-        grid = layout.grid_flow(columns=2, even_columns=True, align=True)
+        # Row by row, in Max's pairs: Grow / Shrink, Loop / Ring, Dot Loop / Dot Ring.
+        grid = layout.grid_flow(row_major=True, columns=2, even_columns=True, align=True)
         for op in ("grow", "shrink", "loop", "ring"):
             grid.operator("maximize." + op)
+        grid.operator("maximize.dot_loop", text="Dot Loop").ring = False
+        grid.operator("maximize.dot_loop", text="Dot Ring").ring = True
+        for op in ("similar", "select_fill", "select_outline"):
+            grid.operator("maximize." + op)
+        header, body = layout.panel("maximize_poly_select_by", default_closed=True)
+        header.label(text="Select By")
+        if body:
+            grid = body.grid_flow(row_major=True, columns=2, even_columns=True, align=True)
+            for op in ("select_nonquads", "select_open", "select_random", "select_mirror"):
+                grid.operator("maximize." + op)
 
 
 def draw_poly_geometry(layout, context):
@@ -284,6 +295,16 @@ def draw_poly_geometry(layout, context):
     layout.prop(context.scene.tool_settings, "use_transform_correct_face_attributes", text="Preserve UVs")
     from .poly_tools import draw_extras
     draw_extras(layout, context)
+    # Max's ribbon Geometry (All) and Subdivision, used less: closed sub-sections.
+    for idname, label, ops in (("maximize_poly_geometry_all", "Geometry (All)",
+                                ("quadrify_all", "quadrify", "symmetrize")),
+                               ("maximize_poly_subdivision", "Subdivision", ("meshsmooth", "tessellate"))):
+        header, body = layout.panel(idname, default_closed=True)
+        header.label(text=label)
+        if body:
+            grid = body.grid_flow(columns=2, even_columns=True, align=True)
+            for op in ops:
+                grid.operator("maximize." + op)
 
 
 # Max's per-level Edit rollout: (label, operator, text) in Max's order.
@@ -334,11 +355,22 @@ def draw_poly_rollouts(layout, context, key):
         overlay = getattr(context.space_data, "overlay", None)
         if level == 'EDGE' and overlay is not None:
             body.prop(overlay, "show_edge_sharp", text="Display Hard Edges")
+    if level == 'EDGE':
+        # Max's ribbon Loops tools.
+        body = rollout(layout, key + "_loops", "Loops")
+        if body:
+            grid = body.grid_flow(columns=2, even_columns=True, align=True)
+            for op in ("insert_loop", "remove_loop"):
+                grid.operator("maximize." + op)
     if level in {'POLYGON', 'ELEMENT'}:
         body = rollout(layout, key + "_material_ids", "Material IDs")
         if body:
             from .poly_tools import draw_material_ids
             draw_material_ids(body, context)
+        body = rollout(layout, key + "_smoothing", "Smoothing Groups", closed=True)
+        if body:
+            from .smoothing import draw_smoothing_groups
+            draw_smoothing_groups(body, context)
 
 
 def draw_spline_selection(layout, context):

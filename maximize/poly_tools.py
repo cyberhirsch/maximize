@@ -1090,7 +1090,90 @@ def draw_material_ids(layout, context):
     layout.operator("maximize.select_material_name").clear = wm.maximize_material_clear
 
 
+# ------------------------------------------------------------------------------
+# Max's Modeling ribbon tools that take two Blender steps
+
+
+class MAXIMIZE_OT_quadrify_all(_EditMesh, Operator):
+    """Quadrify All: join the triangles of the whole mesh into quads"""
+    bl_idname = "maximize.quadrify_all"
+    bl_label = "Quadrify All"
+
+    def execute(self, context):
+        bpy.ops.mesh.select_all(action='SELECT')
+        bpy.ops.mesh.tris_convert_to_quads()
+        return {'FINISHED'}
+
+
+class MAXIMIZE_OT_dot_loop(_EditMesh, Operator):
+    """Dot Loop / Dot Ring: every other edge of the selected edges' loops (rings)"""
+    bl_idname = "maximize.dot_loop"
+    bl_label = "Dot Loop"
+
+    ring: BoolProperty(name="Ring", description="Along the ring instead of the loop")
+    skip: IntProperty(name="Gap", default=1, min=1, max=100, description="Edges skipped between selected ones")
+
+    @classmethod
+    def description(cls, _context, properties):
+        return ("Dot Ring: every other edge of the selected edges' rings" if properties.ring else
+                "Dot Loop: every other edge of the selected edges' loops")
+
+    def execute(self, context):
+        if self.ring:
+            bpy.ops.mesh.select_edge_ring_multi()
+        else:
+            bpy.ops.mesh.select_edge_loop_multi()
+        bpy.ops.mesh.select_nth(skip=self.skip, nth=1)
+        return {'FINISHED'}
+
+
+def _edges_selected(context):
+    return any(e.select for obj in _edit_meshes(context) for e in bmesh.from_edit_mesh(obj.data).edges)
+
+
+class MAXIMIZE_OT_insert_loop(_EditMesh, Operator):
+    """Insert Loop: a new edge loop through the rings of the selected edges"""
+    bl_idname = "maximize.insert_loop"
+    bl_label = "Insert Loop"
+
+    cuts: IntProperty(name="Loops", default=1, min=1, max=100)
+
+    def execute(self, context):
+        if not _edges_selected(context):
+            self.report({'WARNING'}, "Select edges first")
+            return {'CANCELLED'}
+        before = {obj: {v.index for v in bmesh.from_edit_mesh(obj.data).verts} for obj in _edit_meshes(context)}
+        bpy.ops.mesh.select_edge_ring_multi()
+        bpy.ops.mesh.subdivide_edgering(number_cuts=self.cuts)
+        # Max leaves the new loops selected.
+        for obj, old in before.items():
+            bm = bmesh.from_edit_mesh(obj.data)
+            for e in bm.edges:
+                e.select_set(all(v.index not in old for v in e.verts))
+            bm.select_flush_mode()
+            bmesh.update_edit_mesh(obj.data)
+        return {'FINISHED'}
+
+
+class MAXIMIZE_OT_remove_loop(_EditMesh, Operator):
+    """Remove Loop: remove the selected edges' loops, with their vertices"""
+    bl_idname = "maximize.remove_loop"
+    bl_label = "Remove Loop"
+
+    def execute(self, context):
+        if not _edges_selected(context):
+            self.report({'WARNING'}, "Select edges first")
+            return {'CANCELLED'}
+        bpy.ops.mesh.select_edge_loop_multi()
+        bpy.ops.mesh.dissolve_edges(use_verts=True)
+        return {'FINISHED'}
+
+
 classes = (
+    MAXIMIZE_OT_quadrify_all,
+    MAXIMIZE_OT_dot_loop,
+    MAXIMIZE_OT_insert_loop,
+    MAXIMIZE_OT_remove_loop,
     MAXIMIZE_OT_set_material_id,
     MAXIMIZE_OT_select_material_id,
     MAXIMIZE_OT_make_planar_axis,
