@@ -114,6 +114,26 @@ def _prism(b, corners, height):
     return _extrude_fill(b, _polygon(b, corners), height)
 
 
+def _quad_parts_prism(b, corners, parts, height):
+    """The prism of `corners` with its caps made of the convex quads `parts` (corner indices,
+    counter-clockwise): L-Ext and C-Ext, whose outlines are not convex."""
+    walls = b.node('GeometryNodeExtrudeMesh', {
+        "Mesh": b.node('GeometryNodeFillCurve', {"Curve": _polygon(b, corners), "Mode": "N-gons"}).outputs[0],
+        "Offset": b.combine(z=height), "Individual": False}).outputs[0]
+    _x, _y, nz = b.separate(b.node('GeometryNodeInputNormal').outputs[0])
+    cap = b.node('FunctionNodeCompare', {"A": b.math('ABSOLUTE', nz), "B": 0.5},
+                 data_type='FLOAT', operation='GREATER_THAN').outputs[0]
+    walls = b.node('GeometryNodeDeleteGeometry', {"Geometry": walls, "Selection": cap},
+                   domain='FACE', mode='ONLY_FACE').outputs[0]
+    pieces = [walls]
+    for part in parts:
+        quad = b.node('GeometryNodeFillCurve', {"Curve": _polygon(b, [corners[i] for i in part]),
+                                                "Mode": "N-gons"}).outputs[0]
+        pieces.append(b.node('GeometryNodeFlipFaces', {"Mesh": quad}).outputs[0])
+        pieces.append(b.node('GeometryNodeSetPosition', {"Geometry": quad, "Offset": b.combine(z=height)}).outputs[0])
+    return qc.join_merge(b, *pieces)
+
+
 def _polygon(b, corners):
     index = b.node('GeometryNodeInputIndex').outputs[0]
     position = _index_switch(b, index, [b.combine(x, y) for x, y in corners], 'VECTOR')
@@ -248,9 +268,13 @@ def build_teapot(b):
 
 def build_hedra(b):
     radius = b.input("Radius", DIST, 0.5, 0.0, subtype='DISTANCE')
-    family = b.input("Family", INT, 0, 0, 4)
+    family = b.input("Family", INT, 0, 0, 6)
     b.tree.interface.items_tree["Family"].description = (
-        "0 Tetrahedron, 1 Cube, 2 Octahedron, 3 Dodecahedron, 4 Icosahedron")
+        "0 Tetrahedron, 1 Cube, 2 Octahedron, 3 Dodecahedron, 4 Icosahedron, 5 Star1 (small stellated "
+        "dodecahedron), 6 Star2 (great stellated dodecahedron)")
+    # Max's Axis Scaling: the centers of the triangles (P), squares (Q) and pentagons (R) pushed out.
+    axis = [b.input(name, FLOAT, 100.0, 0.0, 1000.0) for name in ("Axis Scaling P", "Axis Scaling Q",
+                                                                  "Axis Scaling R")]
     # Tetrahedron: every other corner of a cube; the others are duals (face centers).
     cube = b.node('GeometryNodeMeshCube', {"Size": b.combine(1.0, 1.0, 1.0)}).outputs["Mesh"]
     x, y, z = b.separate(b.node('GeometryNodeInputPosition').outputs[0])
@@ -268,11 +292,46 @@ def build_hedra(b):
         (octa, 2.0),
         (dodeca, 1.0 / 0.7946544723),
         (ico, 1.0),
+        (dodeca, 1.0 / 0.7946544723),
+        (ico, 1.0),
     ]
     scaled = [b.node('GeometryNodeTransform', {"Geometry": geo, "Scale": (s, s, s)}).outputs[0]
               for geo, s in shapes]
     chosen = _index_switch(b, family, scaled, 'GEOMETRY')
-    return b.node('GeometryNodeTransform', {"Geometry": chosen, "Scale": b.combine(radius, radius, radius)}).outputs[0]
+    # Star1: pentagonal spikes on the dodecahedron whose sides are its neighbors' planes (apex at
+    # sqrt(5) of the inradius); Star2: triangular spikes on the icosahedron (golden-triangle sides,
+    # apex at 3x the inradius).
+    sides = b.node('GeometryNodeInputMeshFaceNeighbors').outputs["Vertex Count"]
+
+    def is_family(n):
+        return b.node('FunctionNodeCompare', {"A": family, "B": n}, data_type='INT', operation='EQUAL').outputs[0]
+
+    def pick(condition, true, false):
+        return b.node('GeometryNodeSwitch', {"Switch": condition, "False": false, "True": true},
+                      input_type='FLOAT').outputs[0]
+
+    def sides_are(n):
+        return b.node('FunctionNodeCompare', {"A": sides, "B": n}, data_type='INT', operation='EQUAL').outputs[0]
+    p, q, r = (b.math('DIVIDE', a, 100.0) for a in axis)
+    p = b.math('MULTIPLY', p, pick(is_family(6), 3.0, 1.0))
+    r = b.math('MULTIPLY', r, pick(is_family(5), math.sqrt(5.0), 1.0))
+    factor = pick(sides_are(3), p, pick(sides_are(4), q, r))
+    poke = b.node('FunctionNodeCompare', {"A": b.math('ABSOLUTE', b.math('SUBTRACT', factor, 1.0)), "B": 1e-4},
+                  data_type='FLOAT', operation='GREATER_THAN').outputs[0]
+    extrude = b.node('GeometryNodeExtrudeMesh', {"Mesh": chosen, "Selection": poke, "Offset Scale": 0.0,
+                                                 "Individual": True})
+    # Each poked face shrinks to its center, moved out by the factor: a pyramid.
+    center = b.node('ShaderNodeVectorMath', {0: b.node('GeometryNodeInputPosition').outputs[0], "Scale": factor},
+                    operation='SCALE').outputs['Vector']
+    spiked = b.node('GeometryNodeScaleElements', {"Geometry": extrude.outputs["Mesh"],
+                                                  "Selection": extrude.outputs["Top"], "Scale": 0.0,
+                                                  "Center": center}, domain='FACE').outputs[0]
+    spiked = b.node('GeometryNodeMergeByDistance', {"Geometry": spiked, "Distance": 1e-5}).outputs[0]
+    # The stars at a radius of 1 to their spikes' tips.
+    fit = _index_switch(b, family, [1.0, 1.0, 1.0, 1.0, 1.0, 1.0 / (0.7946544723 * math.sqrt(5.0)),
+                                    1.0 / (0.7946544723 * 3.0)], 'FLOAT')
+    size = b.math('MULTIPLY', radius, fit)
+    return b.node('GeometryNodeTransform', {"Geometry": spiked, "Scale": b.combine(size, size, size)}).outputs[0]
 
 
 def build_torus_knot(b):
@@ -466,21 +525,56 @@ def build_ringwave(b):
     segments = b.input("Segments", INT, 200, 3, 5000)
     cycles = b.input("Major Cycles", INT, 6, 0, 500)
     amplitude = b.input("Major Amplitude", DIST, 0.05, subtype='DISTANCE')
+    crawl = b.input("Major Crawl Time", FLOAT, 0.0, -10000.0, 10000.0)
+    minor_cycles = b.input("Minor Cycles", INT, 0, 0, 500)
+    minor_amplitude = b.input("Minor Amplitude", DIST, 0.0, subtype='DISTANCE')
+    minor_crawl = b.input("Minor Crawl Time", FLOAT, 0.0, -10000.0, 10000.0)
+    inner_cycles = b.input("Inner Cycles", INT, 0, 0, 500)
+    inner_amplitude = b.input("Inner Amplitude", DIST, 0.0, subtype='DISTANCE')
+    growth = b.input("Growth", INT, 0, 0, 2)
+    b.tree.interface.items_tree["Growth"].description = "0 No Growth, 1 Grow and Stay, 2 Cyclic Growth"
+    grow_start = b.input("Grow Start", FLOAT, 0.0, -100000.0, 100000.0)
+    grow_end = b.input("Grow End", FLOAT, 60.0, -100000.0, 100000.0)
+    b.tree.interface.items_tree["Major Crawl Time"].description = (
+        "Frames for the waves to travel once around (0: still; negative: the other way)")
+    frame = b.node('GeometryNodeInputSceneTime').outputs["Frame"]
     # The ring between Radius - Ring Width and Radius; its outer edge waves.
     inner = b.math('MAXIMUM', b.math('SUBTRACT', radius, ring_width), 0.0)
-    path = b.node('GeometryNodeCurvePrimitiveCircle', {
-        "Resolution": segments, "Radius": b.math('MULTIPLY', b.math('ADD', radius, inner), 0.5)}).outputs[0]
+    middle = b.math('MULTIPLY', b.math('ADD', radius, inner), 0.5)
+    path = b.node('GeometryNodeCurvePrimitiveCircle', {"Resolution": segments, "Radius": middle}).outputs[0]
     profile = b.node('GeometryNodeCurvePrimitiveQuadrilateral', {
         "Width": b.math('MAXIMUM', ring_width, 1e-5), "Height": b.math('MAXIMUM', height, 1e-5)}).outputs[0]
     mesh = b.node('GeometryNodeCurveToMesh', {"Curve": path, "Profile Curve": profile}).outputs[0]
     pos = b.node('GeometryNodeInputPosition').outputs[0]
     x, y, _z = b.separate(pos)
     radial = b.vmath('LENGTH', b.combine(x, y))
-    outer = b.node('FunctionNodeCompare', {"A": radial, "B": b.math('MULTIPLY', b.math('ADD', radius, inner), 0.5)},
+    angle = b.math('ARCTAN2', y, x)
+    outer = b.node('FunctionNodeCompare', {"A": radial, "B": middle},
                    data_type='FLOAT', operation='GREATER_THAN').outputs[0]
-    wave = b.math('MULTIPLY', amplitude, b.math('SINE', b.math('MULTIPLY', cycles, b.math('ARCTAN2', y, x))))
-    offset = _scale(b, b.vmath('NORMALIZE', b.combine(x, y)), wave)
-    geo = b.node('GeometryNodeSetPosition', {"Geometry": mesh, "Selection": outer, "Offset": offset}).outputs[0]
+
+    def phase(time):
+        # One turn of the wave every `time` frames (0: none).
+        moving = b.node('FunctionNodeCompare', {"A": b.math('ABSOLUTE', time), "B": 1e-6},
+                        data_type='FLOAT', operation='GREATER_THAN').outputs[0]
+        turn = b.math('DIVIDE', b.math('MULTIPLY', frame, 2.0 * math.pi), b.math('MAXIMUM', b.math('ABSOLUTE', time), 1e-6))
+        turn = b.math('MULTIPLY', turn, b.math('SIGN', time))
+        return b.node('GeometryNodeSwitch', {"Switch": moving, "False": 0.0, "True": turn}, input_type='FLOAT').outputs[0]
+
+    def wave(count, size, time):
+        return b.math('MULTIPLY', size, b.math('SINE', b.math('SUBTRACT', b.math('MULTIPLY', count, angle), phase(time))))
+    outer_wave = b.math('ADD', wave(cycles, amplitude, crawl), wave(minor_cycles, minor_amplitude, minor_crawl))
+    inner_wave = wave(inner_cycles, inner_amplitude, crawl)
+    offset = b.node('GeometryNodeSwitch', {"Switch": outer, "False": inner_wave, "True": outer_wave},
+                    input_type='FLOAT').outputs[0]
+    geo = b.node('GeometryNodeSetPosition', {"Geometry": mesh,
+                                             "Offset": _scale(b, b.vmath('NORMALIZE', b.combine(x, y)), offset)}).outputs[0]
+    # Growth: the ring grows from nothing between Grow Start and Grow End (once, or over and over).
+    span = b.math('MAXIMUM', b.math('SUBTRACT', grow_end, grow_start), 1e-6)
+    elapsed = b.math('SUBTRACT', frame, grow_start)
+    once = b.math('MINIMUM', b.math('MAXIMUM', b.math('DIVIDE', elapsed, span), 0.0), 1.0)
+    cyclic = b.math('DIVIDE', b.math('FLOORED_MODULO', b.math('MAXIMUM', elapsed, 0.0), span), span)
+    size = _index_switch(b, growth, [1.0, once, cyclic], 'FLOAT')
+    geo = b.node('GeometryNodeTransform', {"Geometry": geo, "Scale": b.combine(size, size, 1.0)}).outputs[0]
     return _lift(b, geo, b.math('MULTIPLY', height, 0.5))
 
 
@@ -494,7 +588,29 @@ def build_hose(b):
     cycles = b.input("Cycles", INT, 5, 0, 500)
     flex_diameter = b.input("Flex Diameter (%)", FLOAT, -20.0, -50.0, 500.0)
     smooth = b.input("Smooth", BOOL, True)
+    # Max's End Point Method "Bound to Object Pivots": the hose runs from the bottom object's pivot
+    # to the top one's, leaving each along that object's Z axis (Tension: how far it follows it).
+    bound = b.input("Bound to Object Pivots", BOOL, False)
+    top_object = b.input("Top Object", 'NodeSocketObject')
+    bottom_object = b.input("Bottom Object", 'NodeSocketObject')
+    top_tension = b.input("Top Tension", FLOAT, 100.0, 0.0, 1000.0)
+    bottom_tension = b.input("Bottom Tension", FLOAT, 100.0, 0.0, 1000.0)
     line = b.node('GeometryNodeCurvePrimitiveLine', {"End": b.combine(z=height)}).outputs[0]
+    ends = []
+    for obj, tension, sign in ((bottom_object, bottom_tension, 1.0), (top_object, top_tension, 1.0)):
+        info = b.node('GeometryNodeObjectInfo', {"Object": obj}, transform_space='RELATIVE')
+        axis = b.node('FunctionNodeRotateVector', {"Vector": b.combine(z=sign), "Rotation": info.outputs["Rotation"]}).outputs[0]
+        ends.append((info.outputs["Location"], axis, tension))
+    (start, start_axis, start_t), (end, end_axis, end_t) = ends
+    reach = b.math('MULTIPLY', b.vmath('DISTANCE', start, end), 1.0 / 3.0)
+
+    def handle(point, axis, tension):
+        return b.vmath('ADD', point, _scale(b, axis, b.math('MULTIPLY', reach, b.math('DIVIDE', tension, 100.0))))
+    bezier = b.node('GeometryNodeCurvePrimitiveBezierSegment', {
+        "Resolution": 64, "Start": start, "Start Handle": handle(start, start_axis, start_t),
+        "End Handle": handle(end, end_axis, end_t), "End": end}, mode='POSITION').outputs[0]
+    line = b.node('GeometryNodeSwitch', {"Switch": bound, "False": line, "True": bezier},
+                  input_type='GEOMETRY').outputs[0]
     path = b.node('GeometryNodeResampleCurve', {"Curve": line, "Mode": "Count",
                                                 "Count": b.math('ADD', segments, 1.0)}).outputs[0]
     profile = b.node('GeometryNodeCurvePrimitiveCircle', {
@@ -525,8 +641,10 @@ def build_l_ext(b):
     height = b.input("Height", DIST, 1.0, 0.0, subtype='DISTANCE')
     sw = _clamp_fillet(b, side_w, b.math('MULTIPLY', front, 2.0), b.math('MULTIPLY', front, 2.0))
     fw = _clamp_fillet(b, front_w, b.math('MULTIPLY', side, 2.0), b.math('MULTIPLY', side, 2.0))
+    quad = b.input("Quad Cap", BOOL, True)
     corners = [(0.0, 0.0), (front, 0.0), (front, fw), (sw, fw), (sw, side), (0.0, side)]
-    return _prism(b, corners, height)
+    return _quad_switch(b, quad, _prism(b, corners, height),
+                        _quad_parts_prism(b, corners, [(0, 1, 2, 3), (0, 3, 4, 5)], height))
 
 
 def build_c_ext(b):
@@ -541,7 +659,9 @@ def build_c_ext(b):
     corners = [(0.0, 0.0), (side, 0.0), (side, side_w), (back_w, side_w),
                (back_w, b.math('SUBTRACT', back, front_w)), (front, b.math('SUBTRACT', back, front_w)),
                (front, back), (0.0, back)]
-    return _prism(b, corners, height)
+    quad = b.input("Quad Cap", BOOL, True)
+    return _quad_switch(b, quad, _prism(b, corners, height),
+                        _quad_parts_prism(b, corners, [(0, 1, 2, 3), (0, 3, 4, 7), (7, 4, 5, 6)], height))
 
 
 def build_prism(b):

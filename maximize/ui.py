@@ -272,6 +272,11 @@ class ToolGrid:
         while self._count % TOOL_COLUMNS:
             self._cell().label(text="")
 
+    def wide(self):
+        """A row of its own, the full width (a tool with a long name, as Max gives it)."""
+        self.pad()
+        return self._column.row(align=True)
+
 
 def rollout(layout, idname, label, closed=False):
     """A Max rollout: a collapsible section; returns its body, or None while it is closed."""
@@ -346,11 +351,14 @@ _POLY_LEVEL_TOOLS = {
     'EDGE': ("Edit Edges", ("insert_vertex", "remove", "split", "extrude_max", "chamfer", "weld", "target_weld", "bridge", "connect",
                             "create_shape", "turn", "hard", "smooth_edges")),
     'BORDER': ("Edit Borders", ("extrude_max", "insert_vertex", "cap", "bridge", "chamfer", "connect", "create_shape")),
-    'POLYGON': ("Edit Polygons", ("smart_extrude", "bevel_poly", "inset", "outline", "bridge", "flip", "hinge_from_edge",
-                                  "extrude_along_spline", "turn", "select_by_angle",
-                                  "create_poly")),
+    'POLYGON': ("Edit Polygons", ("smart_extrude", "bevel_poly", "inset", "outline", "bridge", "flip", "turn",
+                                  "select_by_angle", "create_poly", "hinge_from_edge", "extrude_along_spline")),
     'ELEMENT': ("Edit Elements", ("flip", "create_poly")),
 }
+
+
+# Tools whose names don't fit a quarter of the panel: a full row each, at the end of their rollout.
+_WIDE_TOOLS = {"hinge_from_edge", "extrude_along_spline"}
 
 
 def draw_poly_rollouts(layout, context, key):
@@ -379,6 +387,8 @@ def draw_poly_rollouts(layout, context, key):
         for op in ops:
             if op == "bevel_poly":
                 tool_button(grid, context, "maximize." + op, text="Bevel", translate=False)
+            elif op in _WIDE_TOOLS:
+                tool_button(grid.wide(), context, "maximize." + op)
             else:
                 tool_button(grid, context, "maximize." + op)
         grid.pad()

@@ -78,7 +78,20 @@ cube.modifiers.new("Shell", 'SOLIDIFY')
 n_orig, n_inst = len(evaluated(cube).vertices), len(evaluated(inst).vertices)
 check("modifier added later reaches the instance", n_orig == n_inst and n_orig > 26, n_orig, n_inst)
 own = inst.modifiers.new("Bend", 'SIMPLE_DEFORM')
-check("instance's own modifier stays on it", len(cube.modifiers) == 2)
+check("modifier added to an instance goes on the shared stack", transform.adopt_instance_modifiers() == 1 and
+      [m.name for m in cube.modifiers] == ["TurboSmooth", "Shell", "Bend"] and len(inst.modifiers) == 1,
+      [m.name for m in cube.modifiers], [m.name for m in inst.modifiers])
+# A reference keeps its own modifiers.
+bpy.ops.object.select_all(action='DESELECT')
+cube.select_set(True)
+ctx.view_layer.objects.active = cube
+bpy.ops.maximize.clone(clone_type='REFERENCE', copies=1)
+ref = next(o for o in ctx.selected_objects if o is not cube)
+ref.modifiers.new("Twist", 'SIMPLE_DEFORM')
+transform.adopt_instance_modifiers()
+check("reference keeps its own modifier", len(ref.modifiers) == 2 and len(cube.modifiers) == 3,
+      [m.name for m in ref.modifiers])
+bpy.data.objects.remove(ref)
 
 for o in ctx.selected_objects:
     o.select_set(False)

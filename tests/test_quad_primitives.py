@@ -103,6 +103,13 @@ expect('GENGON', "5 sides", 2, 1.0)
 expect('GENGON', "8 sides", 0, 1.0, Sides=8)
 expect('GENGON', "6 sides filleted", 0, 1.0, Sides=6, Fillet=0.1, **{"Fillet Segs": 2})
 expect('PRISM', "triangle", 2, 1.0)
+# L-Ext and C-Ext: caps split into convex quads (2 and 3).
+obj, s = expect('L_EXT', "quad caps", 0, 1.0)
+check(s["quads"] == 6 + 4, "L_EXT: 6 walls and 4 cap quads, got {}".format(s))
+obj, s = expect('C_EXT', "quad caps", 0, 1.0)
+check(s["quads"] == 8 + 6, "C_EXT: 8 walls and 6 cap quads, got {}".format(s))
+obj, s = expect('L_EXT', "quad cap off", None, 1.0, **{"Quad Cap": False})
+check(s["ngons"] == 2, "L_EXT quad cap off: two n-gon caps, got {}".format(s))
 
 # Quad Cap off: the old caps (Cap Segments 1: one n-gon each).
 obj, s = expect('CYLINDER', "quad cap off", None, 1.0, **{"Quad Cap": False, "Cap Segments": 1})

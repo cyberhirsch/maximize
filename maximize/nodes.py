@@ -9,7 +9,7 @@ import math
 import bpy
 
 # Bump when a group's node layout changes, so files get the new version of the group.
-VERSION = 4
+VERSION = 5
 
 
 def modifier_input(mod, name):

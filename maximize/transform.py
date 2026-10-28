@@ -374,7 +374,7 @@ class MAXIMIZE_OT_align(Operator):
 CLONE_TYPES = (
     ('COPY', "Copy", "Independent copy"),
     ('INSTANCE', "Instance", "Shares the mesh and the modifier stack with the original: editing the mesh or "
-     "the original's modifiers changes all. Modifiers added to an instance stay on it"),
+     "any instance's modifiers changes all (a modifier added to an instance goes on the shared stack)"),
     ('REFERENCE', "Reference", "Shares the original's mesh and modifier stack; modifiers you add to the "
      "reference stay on the reference"),
 )
@@ -405,7 +405,7 @@ def shared_stack(obj):
     return None
 
 
-def _share_stack(new, original):
+def _share_stack(new, original, instance=True):
     """Give `new` the original's modifier stack: its own modifiers go, a Shared Stack modifier
     brings in the original's evaluated mesh (the mesh itself is shared too)."""
     from .nodes import modifier_input
@@ -416,6 +416,49 @@ def _share_stack(new, original):
     mod = new.modifiers.new(SHARED_MODIFIER, 'NODES')
     mod.node_group = _shared_group()
     modifier_input(mod, "Original").value = original
+    # Instances share every modifier (one added to an instance goes on the original's stack);
+    # references keep their own on top, as in Max.
+    new["maximize_instance"] = instance
+
+
+def adopt_instance_modifiers(context=None):
+    """Move modifiers added to instances onto their original's stack, which all of them share.
+    Returns how many moved."""
+    from .nodes import modifier_input
+    context = context or bpy.context
+    moved = 0
+    for obj in list(bpy.data.objects):
+        mod = shared_stack(obj)
+        if mod is None or not obj.get("maximize_instance", False) or len(obj.modifiers) < 2:
+            continue
+        original = modifier_input(mod, "Original").value
+        if original is None or original.library is not None:
+            continue
+        for other in [m for m in obj.modifiers if m != mod]:
+            with context.temp_override(object=obj, active_object=obj, selected_objects=[original],
+                                       selected_editable_objects=[original]):
+                if bpy.ops.object.modifier_copy_to_selected(modifier=other.name) != {'FINISHED'}:
+                    continue
+            obj.modifiers.remove(other)
+            moved += 1
+        obj.modifiers.active = mod
+    return moved
+
+
+def _adopt_later():
+    try:
+        adopt_instance_modifiers()
+    except Exception:
+        pass
+    return None
+
+
+@bpy.app.handlers.persistent
+def _instance_watch(_scene, depsgraph):
+    if any(u.id.__class__.__name__ == "Object" for u in depsgraph.updates) and any(
+            len(o.modifiers) > 1 and shared_stack(o) is not None for o in bpy.context.view_layer.objects):
+        if not bpy.app.timers.is_registered(_adopt_later):
+            bpy.app.timers.register(_adopt_later, first_interval=0.0)
 
 
 def _clone(context, objects, clone_type, offset):
@@ -431,7 +474,7 @@ def _clone(context, objects, clone_type, offset):
         new.matrix_world = Matrix.Translation(offset) @ obj.matrix_world
         if linked and obj.type == 'MESH':
             # Max instances share the modifier stack too, including modifiers added later.
-            _share_stack(new, obj)
+            _share_stack(new, obj, clone_type == 'INSTANCE')
         clones.append(new)
     return clones
 
@@ -459,6 +502,7 @@ class MAXIMIZE_OT_make_unique(Operator):
                 continue
             original = modifier_input(mod, "Original").value
             obj.modifiers.remove(mod)
+            obj.pop("maximize_instance", None)
             if original is None:
                 continue
             # Copy the original's modifiers below the object's own ones.
@@ -668,6 +712,7 @@ classes = (
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
+    bpy.app.handlers.depsgraph_update_post.append(_instance_watch)
 
 
 def unregister():
@@ -675,5 +720,7 @@ def unregister():
     _pending_clone = None
     if bpy.app.timers.is_registered(_watch_clone_drag):
         bpy.app.timers.unregister(_watch_clone_drag)
+    if _instance_watch in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.remove(_instance_watch)
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
