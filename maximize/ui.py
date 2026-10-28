@@ -510,6 +510,9 @@ class MAXIMIZE_PT_edit_poly_rollouts(_ModifierRollouts, Panel):
             # Maximize's mid-stack Sculpt is an Edit Poly underneath: its rollout only.
             sculpt.draw(self.layout, context, obj, mod)
             return
+        # Max's Edit Poly Mode rollout comes first, with Show Cage.
+        from .edit_poly import draw_show_cage
+        draw_show_cage(self.layout, obj, mod)
         draw_poly_rollouts(self.layout, context, "mx_edit_poly")
 
 

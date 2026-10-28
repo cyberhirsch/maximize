@@ -1024,7 +1024,12 @@ def draw_extras(layout, context):
     obj = context.edit_object
     if _cage_modifiers(obj):
         row = layout.row(align=True)
-        row.prop(obj, "maximize_show_cage")
+        from .edit_poly import editing_object
+        if editing_object(context) is None:
+            row.prop(obj, "maximize_show_cage")
+        else:
+            # Edit Poly has Show Cage at the top of its panel.
+            row.label(text="Cage Colors:")
         from . import preferences
         prefs = preferences.get_prefs(context)
         if prefs is not None:

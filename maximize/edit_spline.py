@@ -513,9 +513,21 @@ def _depsgraph_post(scene, _depsgraph):
     session = _session(scene)
     if not session:
         return
+    if _left_edit_mode(session):
+        # Checked again then: an update can come between starting the session and entering
+        # Edit Mode.
+        bpy.app.timers.register(_end_if_left, first_interval=0.0)
+
+
+def _left_edit_mode(session):
     edited_ob = bpy.data.objects.get(session["object" if session.get("native") else "edited"])
-    if edited_ob is None or edited_ob.mode != 'EDIT':
-        bpy.app.timers.register(lambda: end_edit(bpy.context) and None, first_interval=0.0)
+    return edited_ob is None or edited_ob.mode != 'EDIT'
+
+
+def _end_if_left():
+    session = _session(bpy.context.scene)
+    if session and _left_edit_mode(session):
+        end_edit(bpy.context)
 
 
 def editing_object(context):

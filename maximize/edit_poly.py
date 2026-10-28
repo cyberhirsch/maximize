@@ -378,11 +378,23 @@ def _depsgraph_post(scene, _depsgraph):
     session = _session(scene)
     if not session:
         return
+    if _left_edit_mode(session):
+        # Checked again then: an update can come between starting the session and entering
+        # Edit Mode.
+        bpy.app.timers.register(_end_if_left, first_interval=0.0)
+
+
+def _left_edit_mode(session):
     # Native session: the object itself is in Edit Mode (core ends the session on exit).
     watched = session["object"] if session.get("native_session") else session["edited"]
     edited_ob = bpy.data.objects.get(watched)
-    if edited_ob is None or edited_ob.mode != 'EDIT':
-        bpy.app.timers.register(lambda: end_edit(bpy.context) and None, first_interval=0.0)
+    return edited_ob is None or edited_ob.mode != 'EDIT'
+
+
+def _end_if_left():
+    session = _session(bpy.context.scene)
+    if session and _left_edit_mode(session):
+        end_edit(bpy.context)
 
 
 def editing_object(context):
@@ -498,7 +510,55 @@ class MAXIMIZE_PT_edit_poly(Panel):
                 layout.label(text="Topology below changed: edits kept as they were", icon='ERROR')
 
 
+def _above(obj, mod):
+    """The modifiers above `mod` that change the mesh in Edit Mode."""
+    mods = list(obj.modifiers)
+    return [m for m in mods[mods.index(mod) + 1:] if m.show_viewport and m.show_in_editmode]
+
+
+def show_cage(obj, mod):
+    """Max's Show Cage: the Edit Poly's own mesh shows as a cage over the modifiers above it, which
+    is Blender's editing without On Cage. None when nothing above changes the mesh."""
+    above = _above(obj, mod)
+    return None if not above else not any(m.show_on_cage for m in above)
+
+
+class MAXIMIZE_OT_show_cage(Operator):
+    """Show Cage: show the Edit Poly's own mesh as a wireframe cage over the result of the
+    modifiers above it; off, sub-objects are shown and edited on the result"""
+    bl_idname = "maximize.show_cage"
+    bl_label = "Show Cage"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    modifier: bpy.props.StringProperty()
+
+    @classmethod
+    def poll(cls, context):
+        return context.object is not None
+
+    def execute(self, context):
+        obj = context.object
+        mod = obj.modifiers.get(self.modifier)
+        if mod is None or show_cage(obj, mod) is None:
+            return {'CANCELLED'}
+        on = not show_cage(obj, mod)
+        for m in _above(obj, mod):
+            m.show_on_cage = not on
+        return {'FINISHED'}
+
+
+def draw_show_cage(layout, obj, mod):
+    state = show_cage(obj, mod)
+    row = layout.row()
+    row.enabled = state is not None
+    if hasattr(row, "use_text_left"):
+        row.use_text_left = True
+    row.operator("maximize.show_cage", text="Show Cage", emboss=False,
+                 icon='CHECKBOX_HLT' if state else 'CHECKBOX_DEHLT').modifier = mod.name
+
+
 classes = (
+    MAXIMIZE_OT_show_cage,
     MAXIMIZE_OT_edit_poly_add,
     MAXIMIZE_OT_edit_poly_end,
     MAXIMIZE_OT_collapse_to,

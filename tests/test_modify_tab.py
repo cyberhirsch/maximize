@@ -45,12 +45,11 @@ edit = box.modifiers.new("Edit Poly", 'EDIT_POLY')
 box.moritz_modifier_stack_index = box.modifiers.find(edit.name)
 check("modifier selected", box.modifiers.active == edit and edit.show_expanded)
 
-# The stack hides the Parameters modifier.
-from bl_ui.properties_data_modifier import MODIFIER_UL_stack
-flags, order = MODIFIER_UL_stack.filter_items(
-    type("L", (), {"bitflag_filter_item": 1 << 30})(), ctx, box, "modifiers")
-shown = [box.modifiers[i].name for i in order if flags[i]]
-check("Parameters hidden from the stack", shown == ["Edit Poly"], shown)
+# The stack: the Parameters modifier is the base row ("Box"), not a modifier row; plain meshes
+# have an Editable Poly base with sub-object levels, a Box has none.
+from bl_ui import properties_data_modifier as pdm
+check("Box has no levels", pdm.entry_levels(box, None) == ())
+check("Edit Poly levels", pdm.entry_levels(box, edit)[:2] == ('VERTEX', 'EDGE'))
 
 with ctx.temp_override(object=box, active_object=box):
     bpy.ops.object.moritz_modifier_select_base()
@@ -59,4 +58,24 @@ with ctx.temp_override(object=box, active_object=box):
     box.modifiers.active = params
     check("stack operators skip the base modifier",
           not bpy.ops.object.moritz_modifier_toggle.poll())
+# Selecting entries from the stack.
+with ctx.temp_override(object=box, active_object=box):
+    box.modifiers.active = None
+    bpy.ops.object.moritz_modifier_select(modifier=edit.name)
+    check("select entry", box.modifiers.active == edit and edit.show_expanded)
+    bpy.ops.object.moritz_modifier_select(modifier="")
+    check("select base entry", box.modifiers.active is None)
+    from bl_operators.moritz_modifier_stack import is_entry_open
+    bpy.ops.object.moritz_stack_expand(modifier=edit.name)
+    check("expand entry", is_entry_open(box, edit) and not is_entry_open(box, None))
+
+# Show Cage: the modifiers above an Edit Poly edit on their result when it is off.
+from maximize import edit_poly
+check("no cage without modifiers above", edit_poly.show_cage(box, edit) is None)
+smooth = box.modifiers.new("TurboSmooth", 'SUBSURF')
+before = edit_poly.show_cage(box, edit)
+with ctx.temp_override(object=box, active_object=box):
+    bpy.ops.maximize.show_cage(modifier=edit.name)
+check("show cage toggles", before is not None and edit_poly.show_cage(box, edit) is (not before)
+      and smooth.show_on_cage is before)
 say("DONE")
