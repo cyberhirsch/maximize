@@ -10,6 +10,8 @@ Cone and Tube have their pivot at the base, as in Max. Shapes are curve objects 
 parameters on the curve data (`shapes.py`); they are created the same way.
 """
 
+import math
+
 import bpy
 from bpy.props import EnumProperty
 from bpy.types import Operator
@@ -19,6 +21,7 @@ from mathutils.geometry import intersect_line_plane
 
 from . import compound
 from . import primitives_ext as ext
+from . import quad_caps as qc
 from .nodes import GroupBuilder, draw_modifier_inputs, find_group, modifier_input
 from .shapes import (
     SHAPE_KINDS, SHAPE_STEPS, SHAPES, create_shape, draw_shape_parameters, shape_input, shape_kind,
@@ -69,9 +72,22 @@ def _build_sphere(b):
     radius = b.input("Radius", DIST, 0.5, 0.0, subtype='DISTANCE')
     segments = b.input("Segments", INT, 32, 4, 500)
     smooth = b.input("Smooth", BOOL, True)
-    sphere = b.node('GeometryNodeMeshUVSphere', {
-        "Segments": segments, "Rings": b.math('MAXIMUM', b.math('DIVIDE', segments, 2.0), 3.0), "Radius": radius})
+    quad = b.input("Quad Poles", BOOL, True)
+    rings = b.math('MAXIMUM', b.math('FLOOR', b.math('DIVIDE', segments, 2.0)), 3.0)
+    sphere = b.node('GeometryNodeMeshUVSphere', {"Segments": segments, "Rings": rings, "Radius": radius})
     geo = b.store_uv(sphere.outputs["Mesh"], sphere.outputs["UV Map"])
+    # Quad poles: the rings around each pole become a quad grid on the sphere.
+    pole = qc.pole_rings(b, segments, b.math('FLOOR', b.math('MULTIPLY', b.math('SUBTRACT', rings, 1.0), 0.5)))
+    step = b.math('DIVIDE', math.pi, rings)
+    edge = b.math('MULTIPLY', pole, step)
+
+    def profile(k):
+        polar = b.math('ADD', edge, b.math('MULTIPLY', k, step))
+        return (b.math('MULTIPLY', radius, b.math('SINE', polar)),
+                b.math('MULTIPLY', radius, b.math('MULTIPLY', b.math('COSINE', polar), -1.0)))
+    side = qc.lathe(b, segments, b.math('SUBTRACT', rings, b.math('MULTIPLY', pole, 2.0)), profile)
+    quads = qc.join_merge(b, side, *(qc.dome_cap(b, segments, 1, radius, radius, 0.0, edge, top) for top in (True, False)))
+    geo = b.node('GeometryNodeSwitch', {"Switch": quad, "False": geo, "True": quads}, input_type='GEOMETRY').outputs[0]
     return b.node('GeometryNodeSetShadeSmooth', {"Mesh": geo, "Shade Smooth": smooth}).outputs[0]
 
 
@@ -86,6 +102,7 @@ def _build_cylinder(b, cone=False):
     c_segs = b.input("Cap Segments", INT, 1, 1, 100)
     sides = b.input("Sides", INT, 24, 3, 500)
     smooth = b.input("Smooth", BOOL, True)
+    quad = b.input("Quad Cap", BOOL, True)
     if cone:
         prim = b.node('GeometryNodeMeshCone', {
             "Vertices": sides, "Side Segments": h_segs, "Fill Segments": c_segs,
@@ -97,11 +114,28 @@ def _build_cylinder(b, cone=False):
     geo = b.store_uv(prim.outputs["Mesh"], prim.outputs["UV Map"])
     geo = b.node('GeometryNodeSetShadeSmooth', {
         "Mesh": geo, "Selection": prim.outputs["Side"], "Shade Smooth": smooth}).outputs[0]
-    if cone:
+    if not cone:
         # The Cone node already starts at z = 0.
-        return geo
-    return b.node('GeometryNodeTransform', {
-        "Geometry": geo, "Translation": b.combine(z=b.math('MULTIPLY', height, 0.5))}).outputs[0]
+        geo = b.node('GeometryNodeTransform', {
+            "Geometry": geo, "Translation": b.combine(z=b.math('MULTIPLY', height, 0.5))}).outputs[0]
+    quads = _quad_cylinder(b, radius1, radius2 if cone else radius1, height, h_segs, c_segs, sides, smooth)
+    return b.node('GeometryNodeSwitch', {"Switch": quad, "False": geo, "True": quads}, input_type='GEOMETRY').outputs[0]
+
+
+def _quad_cylinder(b, radius1, radius2, height, h_segs, c_segs, sides, smooth):
+    """Cylinder and Cone with quad caps; a radius of 0 is a point (the cone's tip)."""
+    def profile(k):
+        f = b.math('DIVIDE', k, h_segs)
+        return qc._lerp(b, radius1, radius2, f), b.math('MULTIPLY', height, f)
+    side = b.node('GeometryNodeSetShadeSmooth', {"Mesh": qc.lathe(b, sides, h_segs, profile),
+                                                 "Shade Smooth": smooth}).outputs[0]
+    caps = []
+    for radius, z, top in ((radius1, 0.0, False), (radius2, height, True)):
+        cap = qc.flat_cap(b, sides, c_segs, radius, z, top)
+        point = b.node('FunctionNodeCompare', {"A": radius, "B": 1e-6}, data_type='FLOAT',
+                       operation='LESS_THAN').outputs[0]
+        caps.append(b.node('GeometryNodeSwitch', {"Switch": point, "False": cap}, input_type='GEOMETRY').outputs[0])
+    return qc.join_merge(b, side, *caps)
 
 
 def _build_tube(b):

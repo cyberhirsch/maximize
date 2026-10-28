@@ -9,7 +9,7 @@ import math
 import bpy
 
 # Bump when a group's node layout changes, so files get the new version of the group.
-VERSION = 3
+VERSION = 4
 
 
 def modifier_input(mod, name):
@@ -34,6 +34,9 @@ def find_group(name):
     group = bpy.data.node_groups.get(name)
     if group is not None and group.get("maximize_version") == VERSION:
         return group
+    if group is not None:
+        # Made by an earlier version: what uses it keeps it, and the name is free for the new one.
+        group.name = "{} v{}".format(name, group.get("maximize_version", 0))
     return None
 
 

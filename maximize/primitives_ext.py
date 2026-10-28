@@ -12,6 +12,7 @@ for GeoSphere, Hedra and Torus Knot.
 
 import math
 
+from . import quad_caps as qc
 from . import teapot_data
 
 DIST = 'NodeSocketFloat'
@@ -110,12 +111,15 @@ def _index_switch(b, index, values, data_type):
 def _prism(b, corners, height):
     """A closed prism: the polygon `corners` (counter-clockwise (x, y) pairs) extruded up by
     `height`."""
+    return _extrude_fill(b, _polygon(b, corners), height)
+
+
+def _polygon(b, corners):
     index = b.node('GeometryNodeInputIndex').outputs[0]
     position = _index_switch(b, index, [b.combine(x, y) for x, y in corners], 'VECTOR')
     points = b.node('GeometryNodePoints', {"Count": len(corners), "Position": position}).outputs[0]
     curve = b.node('GeometryNodePointsToCurves', {"Points": points}).outputs[0]
-    curve = b.node('GeometryNodeSetSplineCyclic', {"Curve": curve, "Cyclic": True}).outputs[0]
-    return _extrude_fill(b, curve, height)
+    return b.node('GeometryNodeSetSplineCyclic', {"Curve": curve, "Cyclic": True}).outputs[0]
 
 
 def _extrude_fill(b, curve, height):
@@ -334,9 +338,35 @@ def build_chamfercyl(b):
     fillet = b.input("Fillet", DIST, 0.1, 0.0, subtype='DISTANCE')
     fillet_segs = b.input("Fillet Segs", INT, 3, 1, 50)
     sides = b.input("Sides", INT, 24, 3, 500)
+    cap_segs = b.input("Cap Segs", INT, 1, 1, 100)
     smooth = b.input("Smooth", BOOL, True)
+    quad = b.input("Quad Cap", BOOL, True)
     f = _clamp_fillet(b, fillet, b.math('MULTIPLY', radius, 2.0), height)
-    return _smooth(b, _round_cylinder(b, radius, height, f, sides, fillet_segs), smooth)
+    geo = _round_cylinder(b, radius, height, f, sides, fillet_segs)
+    step = b.math('DIVIDE', math.pi / 2, fillet_segs)
+    side = qc.lathe(b, sides, b.math('ADD', b.math('MULTIPLY', fillet_segs, 2.0), 1.0), lambda k: qc.dome_profile(
+        b, k, fillet_segs, 0.0, step, b.math('SUBTRACT', radius, f), f, f, height))
+    side = _smooth(b, side, smooth)
+    inner = b.math('SUBTRACT', radius, f)
+    quads = qc.join_merge(b, side, qc.flat_cap(b, sides, cap_segs, inner, 0.0, False),
+                          qc.flat_cap(b, sides, cap_segs, inner, height, True))
+    return _quad_switch(b, quad, _smooth(b, geo, smooth), quads)
+
+
+def _quad_switch(b, quad, geo, quads):
+    return b.node('GeometryNodeSwitch', {"Switch": quad, "False": geo, "True": quads}, input_type='GEOMETRY').outputs[0]
+
+
+def _quad_domes(b, sides, cap_segs, radius, cap, height):
+    """Capsule and OilTank with quad poles: domes of `radius` and height `cap` on a straight side."""
+    step = b.math('DIVIDE', math.pi / 2, cap_segs)
+    pole = qc.pole_rings(b, sides, cap_segs)
+    edge = b.math('MULTIPLY', pole, step)
+    rings = b.math('SUBTRACT', cap_segs, pole)
+    side = qc.lathe(b, sides, b.math('ADD', b.math('MULTIPLY', rings, 2.0), 1.0), lambda k: qc.dome_profile(
+        b, k, rings, edge, step, 0.0, radius, cap, height))
+    return qc.join_merge(b, side, qc.dome_cap(b, sides, 1, radius, cap, cap, edge, False),
+                         qc.dome_cap(b, sides, 1, radius, cap, b.math('SUBTRACT', height, cap), edge, True))
 
 
 def build_capsule(b):
@@ -345,9 +375,12 @@ def build_capsule(b):
     sides = b.input("Sides", INT, 24, 3, 500)
     cap_segs = b.input("Cap Segs", INT, 6, 1, 100)
     smooth = b.input("Smooth", BOOL, True)
+    quad = b.input("Quad Poles", BOOL, True)
     # Max's Height is overall: the caps are inside it.
     r = _clamp_fillet(b, radius, b.math('MULTIPLY', radius, 2.0), height)
-    return _smooth(b, _round_cylinder(b, r, height, r, sides, cap_segs), smooth)
+    geo = _quad_switch(b, quad, _round_cylinder(b, r, height, r, sides, cap_segs),
+                       _quad_domes(b, sides, cap_segs, r, r, height))
+    return _smooth(b, geo, smooth)
 
 
 def build_oiltank(b):
@@ -357,8 +390,11 @@ def build_oiltank(b):
     sides = b.input("Sides", INT, 24, 3, 500)
     cap_segs = b.input("Cap Segs", INT, 6, 1, 100)
     smooth = b.input("Smooth", BOOL, True)
+    quad = b.input("Quad Poles", BOOL, True)
     cap = _clamp_fillet(b, cap_height, b.math('MULTIPLY', radius, 2.0), height)
-    return _smooth(b, _round_cylinder(b, radius, height, cap, sides, cap_segs, squash=radius), smooth)
+    geo = _quad_switch(b, quad, _round_cylinder(b, radius, height, cap, sides, cap_segs, squash=radius),
+                       _quad_domes(b, sides, cap_segs, radius, cap, height))
+    return _smooth(b, geo, smooth)
 
 
 def build_spindle(b):
@@ -367,7 +403,9 @@ def build_spindle(b):
     cap_height = b.input("Cap Height", DIST, 0.5, 0.0, subtype='DISTANCE')
     sides = b.input("Sides", INT, 24, 3, 500)
     h_segs = b.input("Height Segs", INT, 1, 1, 200)
+    cap_segs = b.input("Cap Segs", INT, 1, 1, 100)
     smooth = b.input("Smooth", BOOL, True)
+    quad = b.input("Quad Cap", BOOL, True)
     cap = _clamp_fillet(b, cap_height, height, height)
     body = b.math('MAXIMUM', b.math('SUBTRACT', height, b.math('MULTIPLY', cap, 2.0)), 0.0)
     cylinder = b.node('GeometryNodeMeshCylinder', {"Vertices": sides, "Side Segments": h_segs,
@@ -383,7 +421,28 @@ def build_spindle(b):
     for geo in (bottom, top, cyl):
         b.set(join.inputs[0], geo)
     geo = b.node('GeometryNodeMergeByDistance', {"Geometry": join.outputs[0], "Distance": 1e-5}).outputs[0]
-    return _smooth(b, geo, smooth)
+    # Quad caps: the disc on each cone.
+    side = qc.lathe(b, sides, h_segs, lambda k: (radius, b.math('ADD', cap, b.math(
+        'MULTIPLY', body, b.math('DIVIDE', k, h_segs)))))
+    quads = qc.join_merge(b, side, qc.cone_cap(b, sides, cap_segs, radius, cap, 0.0, False),
+                          qc.cone_cap(b, sides, cap_segs, radius, cap, height, True))
+    return _smooth(b, _quad_switch(b, quad, geo, quads), smooth)
+
+
+def _quad_prism(b, curve, height, cap_segs):
+    """The closed, convex `curve` as walls of quads up to `height` with quad caps."""
+    count = b.node('GeometryNodeAttributeDomainSize', {"Geometry": curve}, component='CURVE').outputs["Point Count"]
+    loop = b.node('GeometryNodeCurveToMesh', {"Curve": curve}).outputs[0]
+    walls = b.node('GeometryNodeExtrudeMesh', {"Mesh": loop, "Offset": b.combine(z=height)}, mode='EDGES').outputs[0]
+    # Walls face out, whichever way the curve runs.
+    center = b.node('GeometryNodeAttributeStatistic', {"Geometry": curve, "Attribute": b.node(
+        'GeometryNodeInputPosition').outputs[0]}, data_type='FLOAT_VECTOR', domain='POINT').outputs["Mean"]
+    outward = b.vmath('DOT_PRODUCT', b.node('GeometryNodeInputNormal').outputs[0],
+                      b.vmath('SUBTRACT', b.node('GeometryNodeInputPosition').outputs[0], center))
+    walls = b.node('GeometryNodeFlipFaces', {"Mesh": walls, "Selection": b.node('FunctionNodeCompare', {
+        "A": b.on_faces(outward), "B": 0.0}, data_type='FLOAT', operation='LESS_THAN').outputs[0]}).outputs[0]
+    return qc.join_merge(b, walls, qc.polygon_cap(b, count, cap_segs, curve, 0.0, False),
+                         qc.polygon_cap(b, count, cap_segs, curve, height, True))
 
 
 def build_gengon(b):
@@ -392,10 +451,12 @@ def build_gengon(b):
     sides = b.input("Sides", INT, 5, 3, 100)
     fillet = b.input("Fillet", DIST, 0.0, 0.0, subtype='DISTANCE')
     fillet_segs = b.input("Fillet Segs", INT, 1, 1, 50)
+    cap_segs = b.input("Cap Segs", INT, 1, 1, 100)
+    quad = b.input("Quad Cap", BOOL, True)
     circle = b.node('GeometryNodeCurvePrimitiveCircle', {"Resolution": sides, "Radius": radius}).outputs[0]
     curve = b.node('GeometryNodeFilletCurve', {"Curve": circle, "Radius": fillet, "Limit Radius": True,
                                                "Mode": "Poly", "Count": fillet_segs}).outputs[0]
-    return _extrude_fill(b, curve, height)
+    return _quad_switch(b, quad, _extrude_fill(b, curve, height), _quad_prism(b, curve, height, cap_segs))
 
 
 def build_ringwave(b):
@@ -494,7 +555,9 @@ def build_prism(b):
                                 b.math('MULTIPLY', side2, side2)), b.math('MULTIPLY', a, 2.0))
     y = b.math('SQRT', b.math('MAXIMUM', b.math('SUBTRACT', b.math('MULTIPLY', side3, side3), b.math('MULTIPLY', x, x)),
                               0.0))
-    return _prism(b, [(0.0, 0.0), (side1, 0.0), (x, y)], height)
+    quad = b.input("Quad Cap", BOOL, True)
+    curve = _polygon(b, [(0.0, 0.0), (side1, 0.0), (x, y)])
+    return _quad_switch(b, quad, _extrude_fill(b, curve, height), _quad_prism(b, curve, height, 1))
 
 
 BUILDERS = {
