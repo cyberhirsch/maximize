@@ -346,7 +346,7 @@ _POLY_LEVEL_TOOLS = {
     'EDGE': ("Edit Edges", ("insert_vertex", "remove", "split", "extrude_max", "chamfer", "weld", "target_weld", "bridge", "connect",
                             "create_shape", "turn", "hard", "smooth_edges")),
     'BORDER': ("Edit Borders", ("extrude_max", "insert_vertex", "cap", "bridge", "chamfer", "connect", "create_shape")),
-    'POLYGON': ("Edit Polygons", ("bevel_poly", "inset", "outline", "bridge", "flip", "hinge_from_edge",
+    'POLYGON': ("Edit Polygons", ("smart_extrude", "bevel_poly", "inset", "outline", "bridge", "flip", "hinge_from_edge",
                                   "extrude_along_spline", "turn", "select_by_angle",
                                   "create_poly")),
     'ELEMENT': ("Edit Elements", ("flip", "create_poly")),
