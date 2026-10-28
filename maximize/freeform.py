@@ -7,8 +7,8 @@
 - The modifier is a Geometry Nodes modifier named "Freeform" that keeps the mesh on a target
   surface (Draw On), Offset above it. Stock Blender evaluates it.
 - Its panel holds the PolyDraw tools, which draw onto the target: Drag (move on the surface), Step
-  Build / Extend / Optimize (Blender's Poly Build), Conform (put the selection onto the surface
-  now), Strips, Surface, Shapes, Topology, Branches and Splines (drawn strokes), and Solve Surface.
+  Build / Extend / Optimize (Blender's Poly Build), Conform (a brush that paints the vertices onto
+  the surface), Conform All (the whole selection at once), Strips, Surface, Shapes, Topology, Branches and Splines (drawn strokes), and Solve Surface.
 - Paint Deform is sculpting: the Sculpt modifier covers it.
 """
 
@@ -438,6 +438,10 @@ class MaximizeFreeformSettings(PropertyGroup):
                                   description="Quads across a Surface stroke")
     branch_taper: FloatProperty(name="Branch Taper", default=-0.9, min=-1.0, max=10.0,
                                 description="How the branch thins out to its end (-1: to a point, 0: not at all)")
+    brush_size: IntProperty(name="Brush Size", default=50, min=2, max=1000, subtype='PIXEL',
+                            description="Conform brush radius ([ and ] while painting)")
+    brush_strength: FloatProperty(name="Strength", default=0.5, min=0.0, max=1.0, subtype='FACTOR',
+                                  description="How far the Conform brush moves the vertices each step")
     solve_angle: FloatProperty(name="Angle", default=math.radians(35.0), min=0.0, max=math.pi, subtype='ANGLE',
                                description="Solve Surface: edges sharper than this stay hard")
 
@@ -589,10 +593,125 @@ class MAXIMIZE_OT_freeform_draw(Operator):
         gpu.state.blend_set('NONE')
 
 
-class MAXIMIZE_OT_freeform_conform(Operator):
-    """Conform: put the selected vertices (all, with none selected) onto the Draw On surface now"""
-    bl_idname = "maximize.freeform_conform"
+def conform_at(obj, surface, project, center, radius, strength, view=None):
+    """One dab of the Conform brush: the vertices whose screen position (`project(world)`, or None
+    off screen) is within `radius` of `center` move towards the surface, `strength` at the middle
+    falling off to nothing at the rim. With `view` (the view direction), vertices facing away are
+    left alone, so the brush doesn't reach through to the back. Returns how many moved."""
+    bm = bmesh.from_edit_mesh(obj.data)
+    world = obj.matrix_world
+    inverse = world.inverted_safe()
+    normal_matrix = world.to_3x3().inverted_safe().transposed()
+    moved = 0
+    for v in bm.verts:
+        if v.hide:
+            continue
+        if view is not None and (normal_matrix @ v.normal).dot(view) > 0.0:
+            continue
+        point = world @ v.co
+        screen = project(point)
+        if screen is None:
+            continue
+        d = (Vector(screen) - Vector(center)).length
+        if d > radius:
+            continue
+        target = surface.nearest(point)
+        if target is None:
+            continue
+        falloff = (1.0 - (d / radius) ** 2) ** 2
+        v.co = inverse @ point.lerp(target, strength * falloff)
+        moved += 1
+    if moved:
+        bmesh.update_edit_mesh(obj.data, loop_triangles=True, destructive=False)
+    return moved
+
+
+class MAXIMIZE_OT_freeform_conform_brush(Operator):
+    """Conform: paint over the mesh and the vertices under the brush move onto the Draw On surface
+    ([ and ] size the brush; right-click or Esc ends)"""
+    bl_idname = "maximize.freeform_conform_brush"
     bl_label = "Conform"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.edit_object
+        return obj is not None and obj.type == 'MESH' and target_of(obj) is not None
+
+    def invoke(self, context, event):
+        if context.region_data is None:
+            from .vocabulary import view3d_override
+            override = view3d_override(context)
+            if override is None:
+                return {'CANCELLED'}
+            with context.temp_override(**override):
+                bpy.ops.maximize.freeform_conform_brush('INVOKE_DEFAULT')
+            return {'FINISHED'}
+        self._obj = context.edit_object
+        self._region = context.region
+        self._rv3d = context.region_data
+        self._surface = Surface(context, self._obj)
+        self._settings = settings(context)
+        self._painting = False
+        self._mouse = None
+        self._moved = 0
+        self._handle = bpy.types.SpaceView3D.draw_handler_add(self._draw, (), 'WINDOW', 'POST_PIXEL')
+        context.window_manager.modal_handler_add(self)
+        context.area.header_text_set("Conform: paint over the mesh; [ ] brush size; right-click or Esc ends")
+        return {'RUNNING_MODAL'}
+
+    def _dab(self):
+        region, rv3d = self._region, self._rv3d
+        view = view3d_utils.region_2d_to_vector_3d(region, rv3d, self._mouse)
+        self._moved += conform_at(
+            self._obj, self._surface,
+            lambda p: view3d_utils.location_3d_to_region_2d(region, rv3d, p),
+            self._mouse, self._settings.brush_size, self._settings.brush_strength, view)
+
+    def modal(self, context, event):
+        context.area.tag_redraw()
+        if event.type in {'MIDDLEMOUSE', 'WHEELUPMOUSE', 'WHEELDOWNMOUSE', 'TRACKPADPAN', 'TRACKPADZOOM'} or                 event.type.startswith('NDOF'):
+            return {'PASS_THROUGH'}
+        if event.type in {'MOUSEMOVE', 'LEFTMOUSE', 'INBETWEEN_MOUSEMOVE'}:
+            self._mouse = Vector((event.mouse_x - self._region.x, event.mouse_y - self._region.y))
+        if event.type == 'LEFTMOUSE':
+            self._painting = event.value == 'PRESS'
+            if self._painting:
+                self._dab()
+            return {'RUNNING_MODAL'}
+        if event.type == 'MOUSEMOVE' and self._painting:
+            self._dab()
+            return {'RUNNING_MODAL'}
+        if event.value == 'PRESS' and event.type in {'LEFT_BRACKET', 'RIGHT_BRACKET'}:
+            s = self._settings
+            s.brush_size = int(s.brush_size * (0.9 if event.type == 'LEFT_BRACKET' else 1.0 / 0.9) + 0.5)
+            return {'RUNNING_MODAL'}
+        if event.value == 'PRESS' and event.type in {'RIGHTMOUSE', 'ESC', 'RET', 'NUMPAD_ENTER', 'SPACE'}:
+            bpy.types.SpaceView3D.draw_handler_remove(self._handle, 'WINDOW')
+            context.area.header_text_set(None)
+            return {'FINISHED'} if self._moved else {'CANCELLED'}
+        return {'RUNNING_MODAL'}
+
+    def _draw(self):
+        try:
+            mouse, radius = self._mouse, self._settings.brush_size
+        except ReferenceError:
+            return
+        if mouse is None:
+            return
+        points = [(mouse.x + radius * math.cos(a * math.tau / 48), mouse.y + radius * math.sin(a * math.tau / 48))
+                  for a in range(49)]
+        shader = gpu.shader.from_builtin('UNIFORM_COLOR')
+        gpu.state.blend_set('ALPHA')
+        shader.uniform_float("color", (1.0, 0.55, 0.1, 0.9))
+        batch_for_shader(shader, 'LINE_STRIP', {"pos": points}).draw(shader)
+        gpu.state.blend_set('NONE')
+
+
+class MAXIMIZE_OT_freeform_conform(Operator):
+    """Conform All: put the selected vertices (all, with none selected) onto the Draw On surface now"""
+    bl_idname = "maximize.freeform_conform"
+    bl_label = "Conform All"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -694,6 +813,7 @@ def draw(layout, context, obj, mod):
         for tool, text in (('DRAG', "Drag"), ('STEP_BUILD', "Step Build"), ('EXTEND', "Extend"),
                            ('OPTIMIZE', "Optimize")):
             grid.operator("maximize.freeform_tool", text=text).tool = tool
+        grid.operator("maximize.freeform_conform_brush")
         grid.operator("maximize.freeform_conform")
         for kind, text, _d in DRAW_KINDS:
             grid.operator("maximize.freeform_draw", text=text).kind = kind
@@ -703,6 +823,9 @@ def draw(layout, context, obj, mod):
         col.prop(s, "width")
         col.prop(s, "surface_segments")
         col.prop(s, "branch_taper")
+        col = body.column(align=True)
+        col.prop(s, "brush_size")
+        col.prop(s, "brush_strength")
         row = body.row(align=True)
         row.operator("maximize.freeform_solve")
         row.prop(s, "solve_angle")
@@ -729,6 +852,7 @@ classes = (
     MAXIMIZE_OT_freeform_add,
     MAXIMIZE_OT_freeform_new_object,
     MAXIMIZE_OT_freeform_draw,
+    MAXIMIZE_OT_freeform_conform_brush,
     MAXIMIZE_OT_freeform_conform,
     MAXIMIZE_OT_freeform_tool,
     MAXIMIZE_OT_freeform_solve,

@@ -78,6 +78,34 @@ check(bpy.ops.maximize.freeform_conform() == {'FINISHED'}, "Conform runs")
 bm = bmesh.from_edit_mesh(patch.data)
 check(all(abs((patch.matrix_world @ v.co).length - 1.0) < 0.01 for v in bm.verts), "Conform: vertices on the surface")
 
+# Conform brush: a dab in the middle of a fresh patch above the sphere; the middle lands on it,
+# the corners outside the brush stay, and a brush facing the back of the patch moves nothing.
+bpy.ops.object.mode_set(mode='OBJECT')
+bpy.ops.mesh.primitive_grid_add(x_subdivisions=4, y_subdivisions=4, size=0.6, location=(0.0, 0.0, 2.0))
+brushed = ctx.active_object
+add_mod = freeform.add_freeform(brushed, sphere)
+modifier_input(add_mod, "Conform").value = 0.0
+bpy.ops.object.mode_set(mode='EDIT')
+surface = freeform.Surface(ctx, brushed)
+check(bpy.ops.maximize.freeform_conform_brush.poll(), "Conform brush available")
+
+
+def top_view(p):
+    return Vector((p.x * 100.0, p.y * 100.0))
+
+
+check(freeform.conform_at(brushed, surface, top_view, (0.0, 0.0), 20.0, 1.0, Vector((0.0, 0.0, 1.0))) == 0,
+      "Conform brush: back-facing vertices stay")
+moved = freeform.conform_at(brushed, surface, top_view, (0.0, 0.0), 20.0, 1.0, Vector((0.0, 0.0, -1.0)))
+bm = bmesh.from_edit_mesh(brushed.data)
+world = brushed.matrix_world
+middle = next(v for v in bm.verts if v.co.xy.length < 1e-4)
+corners = [v for v in bm.verts if v.co.xy.length > 0.4]
+check(moved == 5, "Conform brush: the middle and its 4 neighbours, got {}".format(moved))
+check(abs((world @ middle.co).length - 1.0) < 0.01, "Conform brush: the middle on the sphere ({:.3f})".format(
+    (world @ middle.co).length))
+check(all(abs((world @ v.co).z - 2.0) < 1e-5 for v in corners), "Conform brush: the corners stay")
+
 # Builders, on an empty Freeform object.
 bpy.ops.object.mode_set(mode='OBJECT')
 for o in ctx.selected_objects:
