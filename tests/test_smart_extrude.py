@@ -114,6 +114,22 @@ select_face((0, 0, 1))
 result, s = run(0.3)
 check(s["ngons"] == 0, "plain extrude keeps quads, got {}".format(s))
 
+# Shift+drag with the Move tool: the Max keymap starts Smart Extrude; other tools keep Shift+drag.
+bpy.ops.preferences.keyconfig_activate(filepath=bpy.utils.preset_find("Max", "keyconfig"))
+kc = bpy.context.window_manager.keyconfigs.active
+check(any(it.idname == "maximize.smart_extrude_drag" and it.type == 'LEFTMOUSE' and it.value == 'CLICK_DRAG'
+          and it.shift and not it.ctrl for it in kc.keymaps["Mesh"].keymap_items), "Shift+drag key in Mesh")
+cube()
+select_face((0, 0, 1))
+area = next(a for a in bpy.context.screen.areas if a.type == 'VIEW_3D') if bpy.context.screen else None
+if area is not None:
+    region = next(r for r in area.regions if r.type == 'WINDOW')
+    with bpy.context.temp_override(area=area, region=region):
+        for tool, expected in (("builtin.select_box", False), ("builtin.move", True)):
+            bpy.ops.wm.tool_set_by_id(name=tool)
+            got = bpy.ops.maximize.smart_extrude_drag.poll()
+            check(got == expected, "Shift+drag with {}: {}, got {}".format(tool, expected, got))
+
 bpy.ops.object.mode_set(mode='OBJECT')
 print("FAILURES", len(failures))
 if failures:

@@ -14,7 +14,7 @@ let go, as one undo step.
 
 import bmesh
 import bpy
-from bpy.props import FloatProperty
+from bpy.props import BoolProperty, FloatProperty
 from bpy.types import Operator
 from bpy_extras import view3d_utils
 from mathutils import Vector
@@ -199,6 +199,8 @@ class MAXIMIZE_OT_smart_extrude(Operator):
 
     distance: FloatProperty(name="Distance", subtype='DISTANCE', default=0.0,
                             description="How far along the normal (negative goes into the mesh)")
+    release_confirm: BoolProperty(name="Confirm on Release", options={'HIDDEN', 'SKIP_SAVE'},
+                                  description="Releasing the mouse button ends the drag")
 
     @classmethod
     def poll(cls, context):
@@ -269,7 +271,8 @@ class MAXIMIZE_OT_smart_extrude(Operator):
             bmesh.update_edit_mesh(obj.data, loop_triangles=True, destructive=False)
             context.area.header_text_set("Smart Extrude: {:.4f}  (Ctrl: steps; into the mesh cuts, into geometry "
                                          "merges)".format(self.distance))
-        elif event.type in {'LEFTMOUSE', 'RET', 'NUMPAD_ENTER'} and event.value == 'PRESS':
+        elif (event.type in {'LEFTMOUSE', 'RET', 'NUMPAD_ENTER'} and event.value == 'PRESS' or
+              event.type == 'LEFTMOUSE' and event.value == 'RELEASE' and self.release_confirm):
             self._restore(context)
             return self.execute(context)
         elif event.type in {'RIGHTMOUSE', 'ESC'} and event.value == 'PRESS':
@@ -278,8 +281,35 @@ class MAXIMIZE_OT_smart_extrude(Operator):
         return {'RUNNING_MODAL'}
 
 
+# The Move tool (and the Transform tool, which has the move handles).
+_MOVE_TOOLS = {"builtin.move", "builtin.transform"}
+
+
+class MAXIMIZE_OT_smart_extrude_drag(Operator):
+    """Shift+drag of polygons with the Move tool: Smart Extrude, as in Max"""
+    bl_idname = "maximize.smart_extrude_drag"
+    bl_label = "Smart Extrude (Shift+Drag)"
+    bl_options = {'INTERNAL'}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.edit_object
+        if obj is None or obj.type != 'MESH' or not context.tool_settings.mesh_select_mode[2]:
+            return False
+        if context.region_data is None or obj.data.total_face_sel == 0:
+            return False
+        tool = context.workspace.tools.from_space_view3d_mode(context.mode, create=False)
+        return tool is not None and tool.idname in _MOVE_TOOLS
+
+    def invoke(self, context, _event):
+        # The button is still down: letting go of it ends the extrusion.
+        result = bpy.ops.maximize.smart_extrude('INVOKE_DEFAULT', release_confirm=True)
+        return {'FINISHED'} if 'RUNNING_MODAL' in result or 'FINISHED' in result else {'CANCELLED'}
+
+
 classes = (
     MAXIMIZE_OT_smart_extrude,
+    MAXIMIZE_OT_smart_extrude_drag,
 )
 
 

@@ -160,6 +160,7 @@ def apply(km, moritz=False, maya_navigation=False):
         if gizmo_km in km.items and km.available("maximize.clone_gizmo", {}):
             km.items[gizmo_km][:0] = [
                 ("maximize.clone_gizmo", _event('LEFTMOUSE', 'CLICK_DRAG', shift=True), None),
+                ("maximize.smart_extrude_drag", _event('LEFTMOUSE', 'CLICK_DRAG', shift=True), None),
                 ("gizmogroup.gizmo_tweak", _event('LEFTMOUSE', 'CLICK_DRAG', shift=True), None),
             ]
     km.bind(om, "object.hide_view_set", _event('H', alt=True), {"unselected": False})
@@ -195,6 +196,8 @@ def apply(km, moritz=False, maya_navigation=False):
     # Edit Poly.
     me = "Mesh"
     km.bind(me, "mesh.select_all", _event('D', ctrl=True), {"action": 'DESELECT'})
+    # Shift+drag of polygons with the Move tool: Smart Extrude (passes on with other tools).
+    km.bind(me, "maximize.smart_extrude_drag", _event('LEFTMOUSE', 'CLICK_DRAG', shift=True))
     km.bind(me, "mesh.select_edge_loop_multi", _event('L', alt=True))
     km.bind(me, "mesh.select_edge_ring_multi", _event('R', alt=True))
     # Double-click an edge: select its loop.
