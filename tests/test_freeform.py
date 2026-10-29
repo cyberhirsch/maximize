@@ -106,12 +106,16 @@ check(abs((world @ middle.co).length - 1.0) < 0.01, "Conform brush: the middle o
     (world @ middle.co).length))
 check(all(abs((world @ v.co).z - 2.0) < 1e-5 for v in corners), "Conform brush: the corners stay")
 
-# Which normal: a patch off to the side above the sphere. Its middle vertex (world x 0.5) goes to
-# the nearest point along the sphere's normal (Target), or straight down its own normal (Active
-# Object), keeping x = 0.5.
+# Which direction: a patch off to the side above the sphere. Its middle vertex (world x 0.5) goes
+# to the closest point (Nearest), straight down its own normal (Active Object), down the view (View,
+# from the top), or along the sphere's normal under the brush (Target: the top of the sphere, so
+# straight down too). Conform All then leaves it there: it is on the sphere already.
 bpy.ops.object.mode_set(mode='OBJECT')
-for direction, want in (('TARGET', Vector((0.5, 0.0, 2.0)).normalized()),
-                        ('OBJECT', Vector((0.5, 0.0, math.sqrt(0.75))))):
+straight_down = Vector((0.5, 0.0, math.sqrt(0.75)))
+closest = Vector((0.5, 0.0, 2.0)).normalized()
+for direction, want in (('NEAREST', closest), ('OBJECT', straight_down), ('TARGET', straight_down),
+                        ('VIEW', straight_down)):
+    want_all = want
     bpy.ops.mesh.primitive_grid_add(x_subdivisions=4, y_subdivisions=4, size=0.6, location=(0.5, 0.0, 2.0))
     side = ctx.active_object
     freeform.add_freeform(side, sphere)
@@ -119,7 +123,8 @@ for direction, want in (('TARGET', Vector((0.5, 0.0, 2.0)).normalized()),
     bpy.ops.object.mode_set(mode='EDIT')
     surface = freeform.Surface(ctx, side)
     mid = next(v.index for v in bmesh.from_edit_mesh(side.data).verts if v.co.xy.length < 1e-4)
-    freeform.conform_at(side, surface, top_view, (50.0, 0.0), 5.0, 1.0, Vector((0.0, 0.0, -1.0)), direction)
+    freeform.conform_at(side, surface, top_view, (50.0, 0.0), 5.0, 1.0, Vector((0.0, 0.0, -1.0)), direction,
+                        lambda _p: Vector((0.0, 0.0, -1.0 if direction == 'VIEW' else 1.0)))
     bm = bmesh.from_edit_mesh(side.data)
     bm.verts.ensure_lookup_table()
     got = side.matrix_world @ bm.verts[mid].co
@@ -131,7 +136,8 @@ for direction, want in (('TARGET', Vector((0.5, 0.0, 2.0)).normalized()),
     bm = bmesh.from_edit_mesh(side.data)
     bm.verts.ensure_lookup_table()
     got = side.matrix_world @ bm.verts[mid].co
-    check((got - want).length < 0.02, "Conform All, normal {}".format(direction))
+    check(want_all is None or (got - want_all).length < 0.02, "Conform All, {}: {}".format(
+        direction, tuple(round(c, 3) for c in got)))
     bpy.ops.object.mode_set(mode='OBJECT')
 ctx.scene.maximize_freeform.conform_direction = 'TARGET'
 
