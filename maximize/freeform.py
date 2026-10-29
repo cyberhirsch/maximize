@@ -7,8 +7,9 @@
 - The modifier is a Geometry Nodes modifier named "Freeform" that keeps the mesh on a target
   surface (Draw On), Offset above it. Stock Blender evaluates it.
 - Its panel holds the PolyDraw tools, which draw onto the target: Drag (move on the surface), Step
-  Build / Extend / Optimize (Blender's Poly Build), Conform (a brush that paints the vertices onto
-  the surface), Conform All (the whole selection at once), Strips, Surface, Shapes, Topology, Branches and Splines (drawn strokes), and Solve Surface.
+  Build / Extend / Optimize (Blender's Poly Build), the Conform brushes (Conform paints the vertices
+  onto the surface; Move, Rotate, Scale and Relax change them and keep them on it), Conform All
+  (the whole selection at once), Strips, Surface, Shapes, Topology, Branches and Splines (drawn strokes), and Solve Surface.
 - Paint Deform is sculpting: the Sculpt modifier covers it.
 """
 
@@ -21,7 +22,7 @@ from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, Po
 from bpy.types import Operator, PropertyGroup
 from bpy_extras import view3d_utils
 from gpu_extras.batch import batch_for_shader
-from mathutils import Vector
+from mathutils import Matrix, Vector
 from mathutils.bvhtree import BVHTree
 from mathutils.geometry import intersect_line_line_2d
 from mathutils.kdtree import KDTree
@@ -651,18 +652,15 @@ class MAXIMIZE_OT_freeform_draw(Operator):
         gpu.state.blend_set('NONE')
 
 
-def conform_at(obj, surface, project, center, radius, strength, view=None, direction='TARGET'):
-    """One dab of the Conform brush: the vertices whose screen position (`project(world)`, or None
-    off screen) is within `radius` of `center` move towards the surface, `strength` at the middle
-    falling off to nothing at the rim. With `view` (the view direction), vertices facing away are
-    left alone, so the brush doesn't reach through to the back. `direction` is the normal they move
-    along (see Surface.conform). Returns how many moved."""
-    bm = bmesh.from_edit_mesh(obj.data)
+def brush_weights(obj, bm, project, center, radius, view=None):
+    """The vertices of `bm` (the edit mesh of `obj`; keep it while using the vertices) under the
+    brush: [(vert, world point, world normal, weight)], the weight 1 at the middle falling off to 0
+    at the rim. `project(world)` gives the screen position (None off screen); with `view` (the view
+    direction) vertices facing away are left out, so the brush doesn't reach through to the back."""
     bm.normal_update()
     world = obj.matrix_world
-    inverse = world.inverted_safe()
     normal_matrix = world.to_3x3().inverted_safe().transposed()
-    moved = 0
+    found = []
     for v in bm.verts:
         if v.hide:
             continue
@@ -674,30 +672,94 @@ def conform_at(obj, surface, project, center, radius, strength, view=None, direc
         if screen is None:
             continue
         d = (Vector(screen) - Vector(center)).length
-        if d > radius:
-            continue
+        if d <= radius:
+            found.append((v, point, normal, (1.0 - (d / radius) ** 2) ** 2))
+    return found
+
+
+def conform_at(obj, surface, project, center, radius, strength, view=None, direction='TARGET'):
+    """One dab of the Conform brush: the vertices under it move towards the surface, `strength` at
+    the middle falling off to nothing at the rim. `direction` is the normal they move along (see
+    Surface.conform). Returns how many moved."""
+    inverse = obj.matrix_world.inverted_safe()
+    bm = bmesh.from_edit_mesh(obj.data)
+    moved = 0
+    for v, point, normal, weight in brush_weights(obj, bm, project, center, radius, view):
         target = surface.conform(point, normal, direction)
-        if target is None:
-            continue
-        falloff = (1.0 - (d / radius) ** 2) ** 2
-        v.co = inverse @ point.lerp(target, strength * falloff)
-        moved += 1
+        if target is not None:
+            v.co = inverse @ point.lerp(target, strength * weight)
+            moved += 1
     if moved:
         bmesh.update_edit_mesh(obj.data, loop_triangles=True, destructive=False)
     return moved
 
 
+def relax_at(obj, surface, project, center, radius, strength, view=None, direction='TARGET'):
+    """One dab of Conform Relax: the vertices under the brush move towards the middle of their
+    neighbours, then onto the surface. Border vertices stay. Returns how many moved."""
+    world = obj.matrix_world
+    inverse = world.inverted_safe()
+    bm = bmesh.from_edit_mesh(obj.data)
+    moves = []
+    for v, point, normal, weight in brush_weights(obj, bm, project, center, radius, view):
+        if not v.link_edges or v.is_boundary:
+            continue
+        middle = sum((world @ e.other_vert(v).co for e in v.link_edges), Vector()) / len(v.link_edges)
+        relaxed = point.lerp(middle, strength * weight)
+        target = surface.conform(relaxed, normal, direction)
+        moves.append((v, relaxed if target is None else relaxed.lerp(target, weight)))
+    # All from the shape as it was, so the order doesn't matter.
+    for v, point in moves:
+        v.co = inverse @ point
+    if moves:
+        bmesh.update_edit_mesh(obj.data, loop_triangles=True, destructive=False)
+    return len(moves)
+
+
+def transform_conform(obj, surface, grabbed, transform, direction='TARGET'):
+    """Conform Move / Rotate / Scale: `grabbed` is [(vert, world point, world normal, weight)] as
+    the drag started; each vertex goes to `transform(point, weight)` and from there onto the
+    surface (all the way at the middle of the brush, less towards the rim)."""
+    inverse = obj.matrix_world.inverted_safe()
+    for v, point, normal, weight in grabbed:
+        moved = transform(point, weight)
+        target = surface.conform(moved, normal, direction)
+        v.co = inverse @ (moved if target is None else moved.lerp(target, weight))
+    if grabbed:
+        bmesh.update_edit_mesh(obj.data, loop_triangles=True, destructive=False)
+    return len(grabbed)
+
+
+CONFORM_BRUSHES = (
+    ('CONFORM', "Conform", "Paint over the mesh: the vertices under the brush move onto the Draw On surface"),
+    ('MOVE', "Conform Move", "Drag: the vertices under the brush move along the surface, staying on it"),
+    ('ROTATE', "Conform Rotate", "Drag around the brush: the vertices under it turn about its middle, "
+     "staying on the surface"),
+    ('SCALE', "Conform Scale", "Drag right to spread, left to gather the vertices under the brush, "
+     "staying on the surface"),
+    ('RELAX', "Conform Relax", "Paint over the mesh: the vertices under the brush even out, staying on the surface"),
+)
+
+
 class MAXIMIZE_OT_freeform_conform_brush(Operator):
-    """Conform: paint over the mesh and the vertices under the brush move onto the Draw On surface
-    ([ and ] size the brush; right-click or Esc ends)"""
+    """Conform brushes ([ and ] size the brush; right-click or Esc ends). Started in Object Mode,
+    they edit the mesh and go back to Object Mode at the end"""
     bl_idname = "maximize.freeform_conform_brush"
     bl_label = "Conform"
     bl_options = {'REGISTER', 'UNDO'}
 
+    mode: EnumProperty(name="Brush", items=CONFORM_BRUSHES)
+
+    @classmethod
+    def description(cls, _context, properties):
+        return next(d for k, _n, d in CONFORM_BRUSHES if k == properties.mode) + \
+            " ([ and ] size the brush; right-click or Esc ends)"
+
     @classmethod
     def poll(cls, context):
-        obj = context.edit_object
-        return obj is not None and obj.type == 'MESH' and target_of(obj) is not None
+        obj = context.edit_object or context.active_object
+        return obj is not None and obj.type == 'MESH' and obj.mode in {'EDIT', 'OBJECT'} and \
+            target_of(obj) is not None
 
     def invoke(self, context, event):
         if context.region_data is None:
@@ -706,58 +768,130 @@ class MAXIMIZE_OT_freeform_conform_brush(Operator):
             if override is None:
                 return {'CANCELLED'}
             with context.temp_override(**override):
-                bpy.ops.maximize.freeform_conform_brush('INVOKE_DEFAULT')
+                bpy.ops.maximize.freeform_conform_brush('INVOKE_DEFAULT', mode=self.mode)
             return {'FINISHED'}
-        self._obj = context.edit_object
+        obj = context.edit_object or context.active_object
+        self._back_to_object = obj.mode == 'OBJECT'
+        if self._back_to_object:
+            bpy.ops.object.mode_set(mode='EDIT')
+        self._obj = obj
         self._region = context.region
         self._rv3d = context.region_data
-        self._surface = Surface(context, self._obj)
+        self._surface = Surface(context, obj)
         self._settings = settings(context)
         self._painting = False
         self._mouse = None
+        self._grab = None
         self._moved = 0
         self._area = context.area
         self._state = ui_state(context)
         self._handle = bpy.types.SpaceView3D.draw_handler_add(self._draw, (), 'WINDOW', 'POST_PIXEL')
         context.window_manager.modal_handler_add(self)
-        context.area.header_text_set("Conform: paint over the mesh; [ ] brush size; right-click or Esc ends")
+        name = next(n for k, n, _d in CONFORM_BRUSHES if k == self.mode)
+        action = "paint over the mesh" if self.mode in {'CONFORM', 'RELAX'} else "drag"
+        context.area.header_text_set("{}: {}; [ ] brush size; right-click or Esc ends".format(name, action))
         return {'RUNNING_MODAL'}
 
+    def _project(self, point):
+        return view3d_utils.location_3d_to_region_2d(self._region, self._rv3d, point)
+
+    def _view(self):
+        return view3d_utils.region_2d_to_vector_3d(self._region, self._rv3d, self._mouse)
+
     def _dab(self):
+        s = self._settings
+        paint = conform_at if self.mode == 'CONFORM' else relax_at
+        self._moved += paint(self._obj, self._surface, self._project, self._mouse, s.brush_size,
+                             s.brush_strength, self._view(), s.conform_direction)
+
+    def _start_drag(self):
+        """Move / Rotate / Scale: what is under the brush as the drag starts, and its middle."""
+        self._bm = bmesh.from_edit_mesh(self._obj.data)
+        grabbed = brush_weights(self._obj, self._bm, self._project, self._mouse, self._settings.brush_size,
+                                self._view())
+        if not grabbed:
+            return
+        hit = self._surface.cast(self._region, self._rv3d, self._mouse)
+        total = sum(w for _v, _p, _n, w in grabbed)
+        pivot = sum((p * w for _v, p, _n, w in grabbed), Vector()) / total
+        normal = hit[1] if hit is not None else -self._view()
+        self._grab = (grabbed, self._mouse.copy(), pivot, normal.normalized())
+
+    def _drag(self):
+        grabbed, start, pivot, normal = self._grab
         region, rv3d = self._region, self._rv3d
-        view = view3d_utils.region_2d_to_vector_3d(region, rv3d, self._mouse)
-        self._moved += conform_at(
-            self._obj, self._surface,
-            lambda p: view3d_utils.location_3d_to_region_2d(region, rv3d, p),
-            self._mouse, self._settings.brush_size, self._settings.brush_strength, view,
-            self._settings.conform_direction)
+        if self.mode == 'MOVE':
+            a = view3d_utils.region_2d_to_location_3d(region, rv3d, start, pivot)
+            b = view3d_utils.region_2d_to_location_3d(region, rv3d, self._mouse, pivot)
+            delta = b - a
+
+            def transform(p, w):
+                return p + delta * w
+        elif self.mode == 'ROTATE':
+            a, b = start - self._centre_start(), self._mouse - self._centre_start()
+            if a.length < 1.0 or b.length < 1.0:
+                return
+            angle = -a.angle_signed(b)
+            # Screen angles turn the other way round the surface's normal when it faces away.
+            if normal.dot(self._view()) > 0.0:
+                angle = -angle
+
+            def transform(p, w):
+                return pivot + Matrix.Rotation(angle * w, 3, normal) @ (p - pivot)
+        else:
+            factor = math.exp((self._mouse.x - start.x) / 200.0)
+
+            def transform(p, w):
+                return pivot + (p - pivot) * (1.0 + (factor - 1.0) * w)
+        self._moved = transform_conform(self._obj, self._surface, grabbed, transform,
+                                        self._settings.conform_direction)
+
+    def _centre_start(self):
+        """Rotate turns about the screen position of the middle of what it grabbed."""
+        return self._project(self._grab[2]) or self._grab[1]
+
+    def _centre(self):
+        return self._grab[1] if self._grab is not None else self._mouse
 
     def _end(self):
         bpy.types.SpaceView3D.draw_handler_remove(self._handle, 'WINDOW')
         self._area.header_text_set(None)
         self._area.tag_redraw()
+        if self._back_to_object and self._obj.mode == 'EDIT':
+            bpy.ops.object.mode_set(mode='OBJECT')
         return {'FINISHED'} if self._moved else {'CANCELLED'}
 
     def modal(self, context, event):
         self._area.tag_redraw()
         if ui_state(context) != self._state:
             # A button elsewhere changed the tool, mode or object: the brush is done.
+            self._back_to_object = False
             return self._end()
         if outside(self._region, event) and not self._painting:
             # Buttons, panels, the Outliner and menus work while the brush is on.
             self._mouse = None
             return {'PASS_THROUGH'}
-        if event.type in {'MIDDLEMOUSE', 'WHEELUPMOUSE', 'WHEELDOWNMOUSE', 'TRACKPADPAN', 'TRACKPADZOOM'} or                 event.type.startswith('NDOF'):
+        if event.type in {'MIDDLEMOUSE', 'WHEELUPMOUSE', 'WHEELDOWNMOUSE', 'TRACKPADPAN', 'TRACKPADZOOM'} or \
+                event.type.startswith('NDOF'):
             return {'PASS_THROUGH'}
         if event.type in {'MOUSEMOVE', 'LEFTMOUSE', 'INBETWEEN_MOUSEMOVE'}:
             self._mouse = Vector((event.mouse_x - self._region.x, event.mouse_y - self._region.y))
+        painting = self.mode in {'CONFORM', 'RELAX'}
         if event.type == 'LEFTMOUSE':
             self._painting = event.value == 'PRESS'
             if self._painting:
-                self._dab()
+                if painting:
+                    self._dab()
+                else:
+                    self._start_drag()
+            else:
+                self._grab = None
             return {'RUNNING_MODAL'}
         if event.type == 'MOUSEMOVE' and self._painting:
-            self._dab()
+            if painting:
+                self._dab()
+            elif self._grab is not None:
+                self._drag()
             return {'RUNNING_MODAL'}
         if event.value == 'PRESS' and event.type in {'LEFT_BRACKET', 'RIGHT_BRACKET'}:
             s = self._settings
@@ -769,7 +903,7 @@ class MAXIMIZE_OT_freeform_conform_brush(Operator):
 
     def _draw(self):
         try:
-            mouse, radius = self._mouse, self._settings.brush_size
+            mouse, radius = self._centre(), self._settings.brush_size
         except ReferenceError:
             return
         if mouse is None:
@@ -893,7 +1027,8 @@ def draw(layout, context, obj, mod):
         for tool, text in (('DRAG', "Drag"), ('STEP_BUILD', "Step Build"), ('EXTEND', "Extend"),
                            ('OPTIMIZE', "Optimize")):
             grid.operator("maximize.freeform_tool", text=text).tool = tool
-        grid.operator("maximize.freeform_conform_brush")
+        for mode, text, _d in CONFORM_BRUSHES:
+            grid.operator("maximize.freeform_conform_brush", text=text).mode = mode
         grid.operator("maximize.freeform_conform")
         for kind, text, _d in DRAW_KINDS:
             grid.operator("maximize.freeform_draw", text=text).kind = kind

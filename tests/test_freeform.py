@@ -13,7 +13,7 @@ import sys
 
 import bmesh
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import addon_utils  # noqa: E402
@@ -134,6 +134,63 @@ for direction, want in (('TARGET', Vector((0.5, 0.0, 2.0)).normalized()),
     check((got - want).length < 0.02, "Conform All, normal {}".format(direction))
     bpy.ops.object.mode_set(mode='OBJECT')
 ctx.scene.maximize_freeform.conform_direction = 'TARGET'
+
+# The other Conform brushes, on a patch lying on top of the sphere.
+bpy.ops.mesh.primitive_grid_add(x_subdivisions=4, y_subdivisions=4, size=0.6, location=(0.0, 0.0, 2.0))
+patch2 = ctx.active_object
+freeform.add_freeform(patch2, sphere)
+modifier_input(freeform.freeform_modifier(patch2), "Conform").value = 0.0
+check(bpy.ops.maximize.freeform_conform_brush.poll(), "Conform brushes available in Object Mode")
+bpy.ops.object.mode_set(mode='EDIT')
+bpy.ops.mesh.select_all(action='SELECT')
+bpy.ops.maximize.freeform_conform()
+surface = freeform.Surface(ctx, patch2)
+down = Vector((0.0, 0.0, -1.0))
+
+
+bm = bmesh.from_edit_mesh(patch2.data)
+bm.verts.ensure_lookup_table()
+
+
+def mid_vert():
+    return bm.verts[mid_index]
+
+
+mid_index = next(v.index for v in bm.verts if abs(v.co.x) < 1e-4 and abs(v.co.y) < 1e-4)
+world = patch2.matrix_world
+
+
+def on_sphere(v):
+    return abs((world @ v.co).length - 1.0) < 0.01
+
+
+# Relax: the middle vertex pushed aside comes back between its neighbours, on the sphere.
+mid_vert().co.x += 0.1
+freeform.relax_at(patch2, surface, top_view, (100.0 * (world @ mid_vert().co).x, 0.0), 3.0, 1.0, down)
+v = mid_vert()
+check(abs((world @ v.co).x) < 0.02 and on_sphere(v), "Conform Relax: back in the middle ({:.3f}), on the sphere".format(
+    (world @ v.co).x))
+
+# Move: the middle moves by the drag, along the sphere.
+grabbed = freeform.brush_weights(patch2, bm, top_view, (0.0, 0.0), 3.0, down)
+check(len(grabbed) == 1, "Conform Move grabs the middle, got {}".format(len(grabbed)))
+start = world @ mid_vert().co
+freeform.transform_conform(patch2, surface, grabbed, lambda p, w: p + Vector((0.2, 0.0, 0.0)) * w)
+v = mid_vert()
+check(abs((world @ v.co).x - start.x - 0.2) < 0.03 and on_sphere(v), "Conform Move: 0.2 along, on the sphere")
+
+# Rotate a quarter turn about the top: (0.15, 0) goes to (0, 0.15); Scale 2: to (0, 0.3).
+side = next(v.index for v in bm.verts if abs((world @ v.co).x - 0.15) < 0.02 and abs(v.co.y) < 1e-4)
+grabbed = [(bm.verts[side], world @ bm.verts[side].co, Vector((0.0, 0.0, 1.0)), 1.0)]
+top = Vector((0.0, 0.0, 1.0))
+freeform.transform_conform(patch2, surface, grabbed, lambda p, w: top + Matrix.Rotation(math.pi / 2, 3, 'Z') @ (p - top))
+p = world @ bm.verts[side].co
+check(abs(p.x) < 0.01 and abs(p.y - 0.15) < 0.02 and on_sphere(bm.verts[side]), "Conform Rotate: a quarter turn, on the sphere")
+grabbed = [(bm.verts[side], p, Vector((0.0, 0.0, 1.0)), 1.0)]
+freeform.transform_conform(patch2, surface, grabbed, lambda q, w: top + (q - top) * 2.0)
+p = world @ bm.verts[side].co
+check(abs(p.y - 0.3) < 0.03 and on_sphere(bm.verts[side]), "Conform Scale: twice as far, on the sphere ({:.3f})".format(p.y))
+bpy.ops.object.mode_set(mode='OBJECT')
 
 # Builders, on an empty Freeform object.
 bpy.ops.object.mode_set(mode='OBJECT')
