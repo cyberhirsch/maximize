@@ -455,6 +455,26 @@ def _freeform_object(context):
     return obj if obj is not None and obj.type == 'MESH' else None
 
 
+_MOUSE = {'LEFTMOUSE', 'RIGHTMOUSE', 'MIDDLEMOUSE', 'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE', 'WHEELUPMOUSE',
+          'WHEELDOWNMOUSE', 'TRACKPADPAN', 'TRACKPADZOOM'}
+
+
+def outside(region, event):
+    """True for a mouse event outside `region`: a click on a button, panel, the Outliner or a menu,
+    which a modal tool passes through to the UI instead of blocking it."""
+    if event.type not in _MOUSE:
+        return False
+    x, y = event.mouse_x - region.x, event.mouse_y - region.y
+    return not (0 <= x < region.width and 0 <= y < region.height)
+
+
+def ui_state(context):
+    """What a click elsewhere can change that ends a modal tool: the mode, the active tool and the
+    object being edited."""
+    tool = context.workspace.tools.from_space_view3d_mode(context.mode, create=False)
+    return context.mode, tool.idname if tool else None, context.active_object
+
+
 DRAW_KINDS = (
     ('STRIPS', "Strips", "Draw strips of quads on the surface"),
     ('SURFACE', "Surface", "Draw a wide patch of quads on the surface"),
@@ -495,12 +515,14 @@ class MAXIMIZE_OT_freeform_draw(Operator):
         if self.kind != 'SPLINES' and obj.mode != 'EDIT':
             bpy.ops.object.mode_set(mode='EDIT')
         self._obj = obj
+        self._area = context.area
         self._region = context.region
         self._rv3d = context.region_data
         self._surface = Surface(context, obj)
         self._settings = settings(context)
         self._stroke = None
         self._strokes = []
+        self._state = ui_state(context)
         self._handle = bpy.types.SpaceView3D.draw_handler_add(self._draw, (), 'WINDOW', 'POST_PIXEL')
         context.window_manager.modal_handler_add(self)
         self._header(context)
@@ -542,11 +564,17 @@ class MAXIMIZE_OT_freeform_draw(Operator):
 
     def _end(self, context):
         bpy.types.SpaceView3D.draw_handler_remove(self._handle, 'WINDOW')
-        context.area.header_text_set(None)
-        context.area.tag_redraw()
+        self._area.header_text_set(None)
+        self._area.tag_redraw()
 
     def modal(self, context, event):
-        context.area.tag_redraw()
+        self._area.tag_redraw()
+        if ui_state(context) != self._state:
+            # A button elsewhere changed the tool, mode or object: this tool is done.
+            self._end(context)
+            return {'CANCELLED'}
+        if outside(self._region, event) and self._stroke is None:
+            return {'PASS_THROUGH'}
         if event.type in {'MIDDLEMOUSE', 'WHEELUPMOUSE', 'WHEELDOWNMOUSE', 'TRACKPADPAN', 'TRACKPADZOOM'} or \
                 event.type.startswith('NDOF'):
             return {'PASS_THROUGH'}
@@ -655,6 +683,8 @@ class MAXIMIZE_OT_freeform_conform_brush(Operator):
         self._painting = False
         self._mouse = None
         self._moved = 0
+        self._area = context.area
+        self._state = ui_state(context)
         self._handle = bpy.types.SpaceView3D.draw_handler_add(self._draw, (), 'WINDOW', 'POST_PIXEL')
         context.window_manager.modal_handler_add(self)
         context.area.header_text_set("Conform: paint over the mesh; [ ] brush size; right-click or Esc ends")
@@ -668,8 +698,21 @@ class MAXIMIZE_OT_freeform_conform_brush(Operator):
             lambda p: view3d_utils.location_3d_to_region_2d(region, rv3d, p),
             self._mouse, self._settings.brush_size, self._settings.brush_strength, view)
 
+    def _end(self):
+        bpy.types.SpaceView3D.draw_handler_remove(self._handle, 'WINDOW')
+        self._area.header_text_set(None)
+        self._area.tag_redraw()
+        return {'FINISHED'} if self._moved else {'CANCELLED'}
+
     def modal(self, context, event):
-        context.area.tag_redraw()
+        self._area.tag_redraw()
+        if ui_state(context) != self._state:
+            # A button elsewhere changed the tool, mode or object: the brush is done.
+            return self._end()
+        if outside(self._region, event) and not self._painting:
+            # Buttons, panels, the Outliner and menus work while the brush is on.
+            self._mouse = None
+            return {'PASS_THROUGH'}
         if event.type in {'MIDDLEMOUSE', 'WHEELUPMOUSE', 'WHEELDOWNMOUSE', 'TRACKPADPAN', 'TRACKPADZOOM'} or                 event.type.startswith('NDOF'):
             return {'PASS_THROUGH'}
         if event.type in {'MOUSEMOVE', 'LEFTMOUSE', 'INBETWEEN_MOUSEMOVE'}:
@@ -687,9 +730,7 @@ class MAXIMIZE_OT_freeform_conform_brush(Operator):
             s.brush_size = int(s.brush_size * (0.9 if event.type == 'LEFT_BRACKET' else 1.0 / 0.9) + 0.5)
             return {'RUNNING_MODAL'}
         if event.value == 'PRESS' and event.type in {'RIGHTMOUSE', 'ESC', 'RET', 'NUMPAD_ENTER', 'SPACE'}:
-            bpy.types.SpaceView3D.draw_handler_remove(self._handle, 'WINDOW')
-            context.area.header_text_set(None)
-            return {'FINISHED'} if self._moved else {'CANCELLED'}
+            return self._end()
         return {'RUNNING_MODAL'}
 
     def _draw(self):
