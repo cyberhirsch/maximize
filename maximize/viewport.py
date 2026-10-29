@@ -43,6 +43,18 @@ def _copy_view(src, dst):
         setattr(dst, prop, value)
 
 
+class MAXIMIZE_OT_space_key(Operator):
+    """Maximize the viewport under the mouse (as Alt+W); elsewhere, or while the animation plays,
+    play / stop the animation"""
+    bl_idname = "maximize.space_key"
+    bl_label = "Maximize Viewport or Play"
+
+    def invoke(self, context, event):
+        if context.area is not None and context.area.type == 'VIEW_3D' and not context.screen.is_animation_playing:
+            return bpy.ops.maximize.viewport_maximize('INVOKE_DEFAULT')
+        return bpy.ops.screen.animation_play()
+
+
 class MAXIMIZE_OT_viewport_maximize(Operator):
     """Maximize the viewport under the mouse; again to return to the four views (Alt+W)"""
     bl_idname = "maximize.viewport_maximize"
@@ -346,6 +358,7 @@ def _load_post(_filepath):
 
 classes = (
     MAXIMIZE_OT_view_projection,
+    MAXIMIZE_OT_space_key,
     MAXIMIZE_OT_viewport_maximize,
     MAXIMIZE_OT_camera_from_view,
     MAXIMIZE_OT_open_editor,
