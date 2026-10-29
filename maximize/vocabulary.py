@@ -2,9 +2,12 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
-"""Max vocabulary: the "Max English" interface translation and Max-named alias operators.
+"""Max vocabulary: the name schemes and Max-named alias operators.
 
-The translation renames Blender labels in place (Merge by Distance -> Weld). The aliases are
+The name schemes, parallel to the keymaps: Blender (Blender's names), Max (Max's names wherever Max
+has one) and Moritz (Max's names, with Blender's name in the tooltip so tutorials and F3 search
+keep working). By default the scheme follows the keymap. They are interface translations
+(Merge by Distance -> Weld), so files and the Python API are unchanged. The aliases are
 operators with Max names that call the Blender operator; they live in the Max menu, so they also
 show up in F3 menu search under both keymaps.
 """
@@ -61,22 +64,88 @@ MAX_TERMS = {
 }
 
 _CONTEXTS = ("*", "Operator", "ID", "Modifier")
-_registered = False
+
+NAME_SCHEMES = (
+    ('AUTO', "Follow Keymap", "Max's names with the Max keymap, Moritz's with the Moritz keymap, "
+     "Blender's otherwise"),
+    ('BLENDER', "Blender", "Blender's names"),
+    ('MAX', "Max", "3ds Max's names wherever Max has one (Weld, Chamfer, Attach, Swift Loop and more)"),
+    ('MORITZ', "Moritz", "Max's names, with Blender's name in the tooltip"),
+)
+_KEYMAP_SCHEMES = {"Max": 'MAX', "Moritz": 'MORITZ'}
+_current = 'BLENDER'
 
 
-def _translation_dict():
+def _blender_tooltips():
+    """Moritz: each renamed operator's and modifier's tooltip ends with its Blender name."""
+    tips = {}
+
+    def add(name, description):
+        if name in MAX_TERMS and description:
+            tips[("*", description)] = "{:s}\nBlender: {:s}".format(description, name)
+    for module in dir(bpy.ops):
+        ops = getattr(bpy.ops, module)
+        for name in dir(ops):
+            try:
+                rna = getattr(ops, name).get_rna_type()
+            except (AttributeError, KeyError, RuntimeError):
+                continue
+            add(rna.name, rna.description)
+    for item in bpy.types.Modifier.bl_rna.properties["type"].enum_items:
+        add(item.name, item.description)
+    return tips
+
+
+def _translation_dict(scheme):
     terms = {(ctx, src): dst for src, dst in MAX_TERMS.items() for ctx in _CONTEXTS}
+    if scheme == 'MORITZ':
+        terms.update(_blender_tooltips())
     return {"en_US": terms, "en_GB": terms}
 
 
-def set_enabled(enabled):
-    global _registered
-    if enabled and not _registered:
-        bpy.app.translations.register(__name__, _translation_dict())
-        _registered = True
-    elif not enabled and _registered:
+def name_scheme(context=None):
+    """The scheme in use: the preference, or for Follow Keymap the one that goes with the keymap."""
+    from .preferences import get_prefs
+    context = context or bpy.context
+    prefs = get_prefs(context)
+    scheme = prefs.name_scheme if prefs else 'AUTO'
+    if scheme == 'AUTO':
+        keyconfig = context.window_manager.keyconfigs.active if context.window_manager else None
+        scheme = _KEYMAP_SCHEMES.get(keyconfig.name if keyconfig else "", 'BLENDER')
+    return scheme
+
+
+def set_scheme(scheme):
+    """Register the names for `scheme` ('BLENDER' / 'MAX' / 'MORITZ') in place of the current ones."""
+    global _current
+    if scheme == _current:
+        return
+    if _current != 'BLENDER':
         bpy.app.translations.unregister(__name__)
-        _registered = False
+    _current = scheme
+    if scheme != 'BLENDER':
+        bpy.app.translations.register(__name__, _translation_dict(scheme))
+        # The names are an interface translation: it has to be on.
+        view = bpy.context.preferences.view
+        view.use_translate_interface = True
+        if scheme == 'MORITZ':
+            view.use_translate_tooltips = True
+    for window in getattr(bpy.context.window_manager, "windows", ()):
+        for area in window.screen.areas:
+            area.tag_redraw()
+
+
+def apply_scheme(context=None):
+    set_scheme(name_scheme(context))
+
+
+def _watch_keymap():
+    """Follow Keymap: the keymap can change in Preferences or the Quick Setup."""
+    try:
+        apply_scheme()
+    except (AttributeError, ReferenceError):
+        pass
+    return 1.0
 
 
 # ------------------------------------------------------------------------------
@@ -237,12 +306,13 @@ classes = tuple(_alias_class(ident, label, target, props, desc)
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
-    from .preferences import get_prefs
-    prefs = get_prefs()
-    set_enabled(prefs.use_max_english if prefs else True)
+    apply_scheme()
+    bpy.app.timers.register(_watch_keymap, first_interval=1.0, persistent=True)
 
 
 def unregister():
-    set_enabled(False)
+    if bpy.app.timers.is_registered(_watch_keymap):
+        bpy.app.timers.unregister(_watch_keymap)
+    set_scheme('BLENDER')
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)

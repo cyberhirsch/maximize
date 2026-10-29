@@ -26,9 +26,9 @@ def active_keymap(context):
     return context.preferences.keymap.active_keyconfig
 
 
-def _update_vocabulary(self, _context):
+def _update_names(_self, context):
     from . import vocabulary
-    vocabulary.set_enabled(self.use_max_english)
+    vocabulary.apply_scheme(context)
 
 
 class MAXIMIZE_OT_keymap_set(bpy.types.Operator):
@@ -46,6 +46,8 @@ class MAXIMIZE_OT_keymap_set(bpy.types.Operator):
             return {'CANCELLED'}
         bpy.ops.preferences.keyconfig_activate(filepath=filepath)
         context.preferences.is_dirty = True
+        from . import vocabulary
+        vocabulary.apply_scheme(context)
         self.report({'INFO'}, "Keymap: {:s}".format(self.keymap.replace("_", " ")))
         return {'FINISHED'}
 
@@ -60,11 +62,16 @@ def draw_keymap_switch(layout, context):
 class MaximizePreferences(bpy.types.AddonPreferences):
     bl_idname = __package__
 
-    use_max_english: BoolProperty(
-        name="Max English",
-        description="Use 3ds Max names in the interface (Weld, Chamfer, Attach, Swift Loop and more)",
-        default=True,
-        update=_update_vocabulary,
+    name_scheme: EnumProperty(
+        name="Names",
+        description="Which names the interface uses, as the keymap sets the keys",
+        items=(('AUTO', "Follow Keymap", "Max's names with the Max keymap, Moritz's with the Moritz keymap, "
+                "Blender's otherwise"),
+               ('BLENDER', "Blender", "Blender's names"),
+               ('MAX', "Max", "3ds Max's names wherever Max has one (Weld, Chamfer, Attach, Swift Loop and more)"),
+               ('MORITZ', "Moritz", "Max's names, with Blender's name in the tooltip")),
+        default='AUTO',
+        update=_update_names,
     )
     use_startup_layout: BoolProperty(
         name="Max Layout for New Files",
@@ -103,7 +110,7 @@ class MaximizePreferences(bpy.types.AddonPreferences):
         draw_keymap_switch(layout, context)
         layout.separator()
         col = layout.column()
-        col.prop(self, "use_max_english")
+        col.prop(self, "name_scheme")
         col.prop(self, "use_startup_layout")
         col.prop(self, "use_hover_highlight")
         col.prop(self, "tool_settings_style")
