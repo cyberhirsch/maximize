@@ -10,7 +10,7 @@
   Build / Extend / Optimize (Blender's Poly Build), the Conform brushes (Conform paints the vertices
   onto the surface; Move, Rotate, Scale and Relax change them and keep them on it), Conform All
   (the whole selection at once), Strips, Surface, Shapes, Topology, Branches and Splines (drawn strokes), and Solve Surface.
-- Paint Deform is sculpting: the Sculpt modifier covers it.
+- Paint Deform is in Edit Poly (paint_deform.py).
 """
 
 import math

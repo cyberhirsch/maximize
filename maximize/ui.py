@@ -391,6 +391,10 @@ def draw_poly_rollouts(layout, context, key):
     body = rollout(layout, key + "_selection", "Selection")
     if body:
         draw_poly_selection(body, context)
+    body = rollout(layout, key + "_paint_deform", "Paint Deform", closed=True)
+    if body:
+        from .paint_deform import draw as draw_paint_deform
+        draw_paint_deform(body, context)
     if context.mode != 'EDIT_MESH':
         return
     body = rollout(layout, key + "_geometry", "Edit Geometry")
