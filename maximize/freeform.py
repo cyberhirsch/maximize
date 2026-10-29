@@ -210,6 +210,30 @@ class Surface:
         n = (self.inverse.to_3x3().transposed() @ normal).normalized()
         return self.matrix @ location + n * self.offset
 
+    def along(self, point, direction):
+        """Where the line through `point` (world) along `direction` meets the surface, the nearer of
+        the two ways, lifted by the Offset; None where it doesn't."""
+        if self.tree is None or direction.length_squared < 1e-12:
+            return None
+        o = self.inverse @ point
+        d = (self.inverse.to_3x3() @ direction).normalized()
+        best = None
+        for way in (d, -d):
+            location, normal, _index, distance = self.tree.ray_cast(o, way)
+            if location is not None and (best is None or distance < best[2]):
+                best = (location, normal, distance)
+        if best is None:
+            return None
+        n = (self.inverse.to_3x3().transposed() @ best[1]).normalized()
+        return self.matrix @ best[0] + n * self.offset
+
+    def conform(self, point, normal, direction):
+        """Where Conform puts a vertex at `point` with the world `normal`: the nearest surface point
+        ('TARGET', along the surface's normal) or along the vertex normal ('OBJECT')."""
+        if direction == 'OBJECT':
+            return self.along(point, normal)
+        return self.nearest(point)
+
 
 def pixel_size(region, rv3d, mouse, point):
     """World length of one pixel at `point`."""
@@ -438,6 +462,12 @@ class MaximizeFreeformSettings(PropertyGroup):
                                   description="Quads across a Surface stroke")
     branch_taper: FloatProperty(name="Branch Taper", default=-0.9, min=-1.0, max=10.0,
                                 description="How the branch thins out to its end (-1: to a point, 0: not at all)")
+    conform_direction: EnumProperty(
+        name="Normal", default='TARGET',
+        items=(('TARGET', "Target", "Vertices move along the Draw On surface's normal, to the nearest point on it"),
+               ('OBJECT', "Active Object", "Vertices move along their own normals, the conformed mesh's, "
+                "until they meet the surface")),
+        description="Which normal Conform moves the vertices along")
     brush_size: IntProperty(name="Brush Size", default=50, min=2, max=1000, subtype='PIXEL',
                             description="Conform brush radius ([ and ] while painting)")
     brush_strength: FloatProperty(name="Strength", default=0.5, min=0.0, max=1.0, subtype='FACTOR',
@@ -621,12 +651,14 @@ class MAXIMIZE_OT_freeform_draw(Operator):
         gpu.state.blend_set('NONE')
 
 
-def conform_at(obj, surface, project, center, radius, strength, view=None):
+def conform_at(obj, surface, project, center, radius, strength, view=None, direction='TARGET'):
     """One dab of the Conform brush: the vertices whose screen position (`project(world)`, or None
     off screen) is within `radius` of `center` move towards the surface, `strength` at the middle
     falling off to nothing at the rim. With `view` (the view direction), vertices facing away are
-    left alone, so the brush doesn't reach through to the back. Returns how many moved."""
+    left alone, so the brush doesn't reach through to the back. `direction` is the normal they move
+    along (see Surface.conform). Returns how many moved."""
     bm = bmesh.from_edit_mesh(obj.data)
+    bm.normal_update()
     world = obj.matrix_world
     inverse = world.inverted_safe()
     normal_matrix = world.to_3x3().inverted_safe().transposed()
@@ -634,7 +666,8 @@ def conform_at(obj, surface, project, center, radius, strength, view=None):
     for v in bm.verts:
         if v.hide:
             continue
-        if view is not None and (normal_matrix @ v.normal).dot(view) > 0.0:
+        normal = (normal_matrix @ v.normal).normalized()
+        if view is not None and normal.dot(view) > 0.0:
             continue
         point = world @ v.co
         screen = project(point)
@@ -643,7 +676,7 @@ def conform_at(obj, surface, project, center, radius, strength, view=None):
         d = (Vector(screen) - Vector(center)).length
         if d > radius:
             continue
-        target = surface.nearest(point)
+        target = surface.conform(point, normal, direction)
         if target is None:
             continue
         falloff = (1.0 - (d / radius) ** 2) ** 2
@@ -696,7 +729,8 @@ class MAXIMIZE_OT_freeform_conform_brush(Operator):
         self._moved += conform_at(
             self._obj, self._surface,
             lambda p: view3d_utils.location_3d_to_region_2d(region, rv3d, p),
-            self._mouse, self._settings.brush_size, self._settings.brush_strength, view)
+            self._mouse, self._settings.brush_size, self._settings.brush_strength, view,
+            self._settings.conform_direction)
 
     def _end(self):
         bpy.types.SpaceView3D.draw_handler_remove(self._handle, 'WINDOW')
@@ -763,13 +797,18 @@ class MAXIMIZE_OT_freeform_conform(Operator):
     def execute(self, context):
         obj = context.edit_object
         surface = Surface(context, obj)
+        direction = settings(context).conform_direction
         bm = bmesh.from_edit_mesh(obj.data)
+        bm.normal_update()
         verts = [v for v in bm.verts if v.select and not v.hide] or [v for v in bm.verts if not v.hide]
         world = obj.matrix_world
         inverse = world.inverted_safe()
+        normal_matrix = world.to_3x3().inverted_safe().transposed()
+        # All from the shape as it was, so the order doesn't change the normals.
+        targets = [(v, surface.conform(world @ v.co, (normal_matrix @ v.normal).normalized(), direction))
+                   for v in verts]
         moved = 0
-        for v in verts:
-            p = surface.nearest(world @ v.co)
+        for v, p in targets:
             if p is not None:
                 v.co = inverse @ p
                 moved += 1
@@ -865,6 +904,7 @@ def draw(layout, context, obj, mod):
         col.prop(s, "surface_segments")
         col.prop(s, "branch_taper")
         col = body.column(align=True)
+        col.row(align=True).prop(s, "conform_direction", expand=True)
         col.prop(s, "brush_size")
         col.prop(s, "brush_strength")
         row = body.row(align=True)

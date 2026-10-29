@@ -106,6 +106,35 @@ check(abs((world @ middle.co).length - 1.0) < 0.01, "Conform brush: the middle o
     (world @ middle.co).length))
 check(all(abs((world @ v.co).z - 2.0) < 1e-5 for v in corners), "Conform brush: the corners stay")
 
+# Which normal: a patch off to the side above the sphere. Its middle vertex (world x 0.5) goes to
+# the nearest point along the sphere's normal (Target), or straight down its own normal (Active
+# Object), keeping x = 0.5.
+bpy.ops.object.mode_set(mode='OBJECT')
+for direction, want in (('TARGET', Vector((0.5, 0.0, 2.0)).normalized()),
+                        ('OBJECT', Vector((0.5, 0.0, math.sqrt(0.75))))):
+    bpy.ops.mesh.primitive_grid_add(x_subdivisions=4, y_subdivisions=4, size=0.6, location=(0.5, 0.0, 2.0))
+    side = ctx.active_object
+    freeform.add_freeform(side, sphere)
+    modifier_input(freeform.freeform_modifier(side), "Conform").value = 0.0
+    bpy.ops.object.mode_set(mode='EDIT')
+    surface = freeform.Surface(ctx, side)
+    mid = next(v.index for v in bmesh.from_edit_mesh(side.data).verts if v.co.xy.length < 1e-4)
+    freeform.conform_at(side, surface, top_view, (50.0, 0.0), 5.0, 1.0, Vector((0.0, 0.0, -1.0)), direction)
+    bm = bmesh.from_edit_mesh(side.data)
+    bm.verts.ensure_lookup_table()
+    got = side.matrix_world @ bm.verts[mid].co
+    check((got - want).length < 0.02, "Conform normal {}: {} (want {})".format(
+        direction, tuple(round(c, 3) for c in got), tuple(round(c, 3) for c in want)))
+    ctx.scene.maximize_freeform.conform_direction = direction
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.maximize.freeform_conform()
+    bm = bmesh.from_edit_mesh(side.data)
+    bm.verts.ensure_lookup_table()
+    got = side.matrix_world @ bm.verts[mid].co
+    check((got - want).length < 0.02, "Conform All, normal {}".format(direction))
+    bpy.ops.object.mode_set(mode='OBJECT')
+ctx.scene.maximize_freeform.conform_direction = 'TARGET'
+
 # Builders, on an empty Freeform object.
 bpy.ops.object.mode_set(mode='OBJECT')
 for o in ctx.selected_objects:
