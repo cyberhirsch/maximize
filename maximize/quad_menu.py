@@ -234,17 +234,26 @@ def _counts(entries):
 
 
 def _quadrant(layout, context, title, entries, size, title_last, left):
-    """A quadrant padded to `size` (rows, lines); the title sits next to the cursor."""
-    col = layout.box().column(align=True)
+    """A quadrant padded to `size` (rows, lines); the title sits next to the cursor, in a band
+    through the middle of the menu as in Max."""
+    col = layout.column(align=True)
     rows, seps = _counts(entries)
     pad = [("gap",)] * (size[0] - rows) + [SEP] * (size[1] - seps)
     if title_last:
         # Top quadrants grow upward from the cursor.
         _draw_entries(col, context, pad + entries, left)
-        _row(col, left).label(text=title)
+        _title(col, title, left)
     else:
-        _row(col, left).label(text=title)
+        _title(col, title, left)
         _draw_entries(col, context, entries + pad, left)
+
+
+def _title(col, title, left):
+    band = col.box()
+    band.scale_y = 0.7
+    row = _row(band, left)
+    row.enabled = False
+    row.label(text=title)
 
 
 def _size(a, b):
