@@ -10,18 +10,23 @@ Smudge, Noise, Exaggerate and Revert (paint). Ctrl turns Push into Pull, Pinch i
 Relax into Soften's opposite. While a brush is on, right-click or Enter commits, Esc cancels the
 whole session (Max's Commit / Cancel), and Revert paints the mesh back to how it was when the
 brush started.
+
+Pick locks the brushes to one object, Mirror repeats every change on the other side of the
+object's own X, Y or Z, and Defaults are presets of the brush settings (Blender's preset menu).
 """
 
 import math
+import os
 
 import bmesh
 import bpy
 import gpu
-from bpy.props import EnumProperty, FloatProperty, IntProperty, PointerProperty
-from bpy.types import Operator, PropertyGroup
+from bl_operators.presets import AddPresetBase
+from bpy.props import BoolVectorProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty
+from bpy.types import Menu, Operator, PropertyGroup
 from bpy_extras import view3d_utils
 from gpu_extras.batch import batch_for_shader
-from mathutils import Matrix, Vector
+from mathutils import Matrix, Vector, kdtree
 from mathutils.noise import noise
 
 from .freeform import brush_weights, outside, pixel_size, ui_state
@@ -49,6 +54,10 @@ class MaximizePaintDeformSettings(PropertyGroup):
                             description="How much each step of the brush changes the mesh")
     push_value: FloatProperty(name="Push/Pull Value", default=0.1, min=0.0, soft_max=1.0, subtype='FACTOR',
                               description="Push/Pull and Noise per step, as a part of the brush's size")
+    picked: PointerProperty(name="Pick", type=bpy.types.Object, poll=lambda _self, obj: obj.type == 'MESH',
+                            description="Lock the brushes to this object (empty: the active object)")
+    mirror: BoolVectorProperty(name="Mirror", size=3, subtype='XYZ',
+                               description="Repeat every change on the other side of the object's own axis")
 
 
 def settings(context):
@@ -116,6 +125,52 @@ def paint_step(obj, bm, under, mode, strength, invert=False, world_radius=1.0, p
     return len(moves)
 
 
+def mirror_pairs(bm, axes, tolerance=1e-4):
+    """{vertex index: [(axis, index of its mirror image)]} across the local `axes` (X, Y, Z
+    booleans); a vertex on the mirror plane is its own image."""
+    tree = kdtree.KDTree(len(bm.verts))
+    for v in bm.verts:
+        tree.insert(v.co, v.index)
+    tree.balance()
+    pairs = {}
+    for i, on in enumerate(axes):
+        if not on:
+            continue
+        for v in bm.verts:
+            image = v.co.copy()
+            image[i] = -image[i]
+            _co, j, dist = tree.find(image)
+            if j is not None and dist <= tolerance:
+                pairs.setdefault(v.index, []).append((i, j))
+    return pairs
+
+
+def apply_mirror(bm, pairs, moved):
+    """After the brush moved the vertices `moved`, their mirror images follow. Where both sides
+    were under the brush they meet halfway; a vertex on the mirror plane stays on it."""
+    bm.verts.ensure_lookup_table()
+    done = set()
+    for v in moved:
+        for axis, j in pairs.get(v.index, ()):
+            if (axis, v.index) in done:
+                continue
+            other = bm.verts[j]
+            image = v.co.copy()
+            image[axis] = -image[axis]
+            if j == v.index:
+                v.co[axis] = 0.0
+            elif other in moved:
+                middle = (image + other.co) * 0.5
+                other.co = middle
+                middle = middle.copy()
+                middle[axis] = -middle[axis]
+                v.co = middle
+            else:
+                other.co = image
+            done.add((axis, v.index))
+            done.add((axis, j))
+
+
 def shift(obj, grabbed, transform):
     """Shift / Shift Rotate / Shift Scale: each grabbed vertex goes to `transform(point, weight)`."""
     inverse = obj.matrix_world.inverted_safe()
@@ -155,12 +210,23 @@ class MAXIMIZE_OT_paint_deform(Operator):
                 bpy.ops.maximize.paint_deform('INVOKE_DEFAULT', mode=self.mode)
             return {'FINISHED'}
         obj = context.edit_object or context.active_object
+        picked = settings(context).picked
+        if picked is not None and picked != obj and picked.name in context.view_layer.objects:
+            # Pick: the brushes work on the picked object only.
+            if obj.mode == 'EDIT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+            context.view_layer.objects.active = picked
+            picked.select_set(True)
+            obj = picked
         self._back_to_object = obj.mode == 'OBJECT'
         if self._back_to_object:
             bpy.ops.object.mode_set(mode='EDIT')
         self._obj = obj
         self._bm = bmesh.from_edit_mesh(obj.data)
+        self._bm.verts.ensure_lookup_table()
         self._originals = [v.co.copy() for v in self._bm.verts]
+        mirror = tuple(settings(context).mirror)
+        self._mirror = mirror_pairs(self._bm, mirror) if any(mirror) else None
         self._region = context.region
         self._rv3d = context.region_data
         self._settings = settings(context)
@@ -209,6 +275,12 @@ class MAXIMIZE_OT_paint_deform(Operator):
             self._last = self._mouse.copy()
         self._moved += paint_step(self._obj, self._bm, under, self.mode, s.strength, event.ctrl,
                                   self._world_radius(under), s.push_value, stroke, self._originals)
+        self._mirrored(under)
+
+    def _mirrored(self, under):
+        if self._mirror:
+            apply_mirror(self._bm, self._mirror, {v for v, *_x in under})
+            bmesh.update_edit_mesh(self._obj.data, loop_triangles=True, destructive=False)
 
     def _start_drag(self):
         grabbed = self._under()
@@ -243,6 +315,7 @@ class MAXIMIZE_OT_paint_deform(Operator):
             def transform(p, w):
                 return pivot + (p - pivot) * (1.0 + (factor - 1.0) * w)
         self._moved = shift(self._obj, grabbed, transform)
+        self._mirrored(grabbed)
 
     def _end(self, cancel=False):
         bpy.types.SpaceView3D.draw_handler_remove(self._handle, 'WINDOW')
@@ -326,6 +399,14 @@ def draw(layout, context):
     for mode, text, _d in PAINT_BRUSHES:
         grid.operator("maximize.paint_deform", text=text).mode = mode
     grid.pad()
+    row = layout.row(align=True)
+    row.menu("MAXIMIZE_MT_paint_deform_presets", text=MAXIMIZE_MT_paint_deform_presets.bl_label)
+    row.operator("maximize.paint_deform_preset_add", text="", icon='ADD')
+    row.operator("maximize.paint_deform_preset_add", text="", icon='REMOVE').remove_active = True
+    layout.prop(s, "picked", icon='LOCKED' if s.picked else 'UNLOCKED')
+    row = layout.row(align=True)
+    row.label(text="Mirror")
+    row.prop(s, "mirror", text="", toggle=True)
     col = layout.column(align=True)
     col.prop(s, "size")
     col.prop(s, "strength")
@@ -333,9 +414,49 @@ def draw(layout, context):
     layout.label(text="Right-click commits, Esc cancels, Ctrl inverts", icon='INFO')
 
 
+PRESET_SUBDIR = "maximize/paint_deform"
+
+# Starter presets (Max's Defaults): name -> (size, strength, push/pull value).
+_STARTERS = {
+    "Fine": (25, 0.15, 0.05),
+    "Medium": (60, 0.3, 0.1),
+    "Broad": (150, 0.5, 0.2),
+}
+
+
+class MAXIMIZE_MT_paint_deform_presets(Menu):
+    bl_label = "Defaults"
+    preset_subdir = PRESET_SUBDIR
+    preset_operator = "script.execute_preset"
+    draw = Menu.draw_preset
+
+
+class MAXIMIZE_OT_paint_deform_preset_add(AddPresetBase, Operator):
+    """Save the brush settings as a preset, or remove the chosen one"""
+    bl_idname = "maximize.paint_deform_preset_add"
+    bl_label = "Add Paint Deform Preset"
+    preset_menu = "MAXIMIZE_MT_paint_deform_presets"
+    preset_defines = ["s = bpy.context.scene.maximize_paint_deform"]
+    preset_values = ["s.size", "s.strength", "s.push_value"]
+    preset_subdir = PRESET_SUBDIR
+
+
+def write_starters():
+    """The starter presets, once, into the user's preset folder."""
+    folder = bpy.utils.user_resource('SCRIPTS', path=os.path.join("presets", PRESET_SUBDIR), create=True)
+    if not folder or any(name.endswith(".py") for name in os.listdir(folder)):
+        return
+    for name, (size, strength, push) in _STARTERS.items():
+        with open(os.path.join(folder, name + ".py"), "w", encoding="utf-8") as f:
+            f.write("import bpy\ns = bpy.context.scene.maximize_paint_deform\n"
+                    "s.size = {:d}\ns.strength = {!r}\ns.push_value = {!r}\n".format(size, strength, push))
+
+
 classes = (
     MaximizePaintDeformSettings,
     MAXIMIZE_OT_paint_deform,
+    MAXIMIZE_MT_paint_deform_presets,
+    MAXIMIZE_OT_paint_deform_preset_add,
 )
 
 
@@ -343,6 +464,10 @@ def register():
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.types.Scene.maximize_paint_deform = PointerProperty(type=MaximizePaintDeformSettings)
+    try:
+        write_starters()
+    except OSError:
+        pass
 
 
 def unregister():

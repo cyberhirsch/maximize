@@ -112,6 +112,34 @@ reset()
 paint_deform.shift(obj, under(), lambda p, w: p + Vector((0.0, 0.0, 0.3)) * w)
 check(abs(at().z - 0.3) < 1e-4 and abs(bm.verts[0].co.z) < 1e-6, "Shift: the middle lifts, the corner stays")
 
+# Mirror on X: a vertex moved on the +X side moves its image on the -X side.
+reset()
+pairs = paint_deform.mirror_pairs(bm, (True, False, False))
+right = next(v for v in bm.verts if abs(v.co.x - 0.6) < 1e-4 and abs(v.co.y - 0.2) < 1e-4)
+left = next(v for v in bm.verts if abs(v.co.x + 0.6) < 1e-4 and abs(v.co.y - 0.2) < 1e-4)
+right.co.z = 0.3
+right.co.x = 0.65
+paint_deform.apply_mirror(bm, pairs, {right})
+check(abs(left.co.z - 0.3) < 1e-6 and abs(left.co.x + 0.65) < 1e-6, "Mirror X: the other side follows")
+centre = next(v for v in bm.verts if abs(v.co.x) < 1e-4 and abs(v.co.y - 0.2) < 1e-4)
+centre.co.x = 0.05
+paint_deform.apply_mirror(bm, pairs, {centre})
+check(abs(centre.co.x) < 1e-6, "Mirror X: a vertex on the plane stays on it")
+
+# Defaults: the starter presets are in the preset folder, and applying one sets the brush.
+import os  # noqa: E402
+folder = bpy.utils.user_resource('SCRIPTS', path=os.path.join("presets", paint_deform.PRESET_SUBDIR))
+paint_deform.write_starters()
+names = sorted(f for f in os.listdir(folder) if f.endswith(".py"))
+check({"Broad.py", "Fine.py", "Medium.py"} <= set(names), "Defaults: starter presets")
+bpy.ops.script.execute_preset(filepath=os.path.join(folder, "Broad.py"), menu_idname="MAXIMIZE_MT_paint_deform_presets")
+check(paint_deform.settings(ctx).size == 150, "Defaults: Broad sets the size")
+
+# Pick: the picked object is the one the brushes work on.
+s = paint_deform.settings(ctx)
+s.picked = obj
+check(s.picked == obj, "Pick: locked to the grid")
+
 bpy.ops.object.mode_set(mode='OBJECT')
 print("FAILURES", len(failures))
 if failures:
