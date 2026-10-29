@@ -8,7 +8,7 @@ import math
 
 import bmesh
 import bpy
-from bpy.props import BoolVectorProperty, EnumProperty, FloatVectorProperty, IntProperty, StringProperty
+from bpy.props import BoolProperty, BoolVectorProperty, EnumProperty, FloatVectorProperty, IntProperty, StringProperty
 from bpy.types import Operator
 from bpy_extras import view3d_utils
 from mathutils import Euler, Matrix, Vector
@@ -267,6 +267,8 @@ class MAXIMIZE_OT_align_apply(Operator):
     target_point: EnumProperty(name="Target Object", items=POINTS, default='CENTER')
     orientation: BoolVectorProperty(name="Align Orientation (Local)", size=3, default=(False, False, False))
     match_scale: BoolVectorProperty(name="Match Scale", size=3, default=(False, False, False))
+    pivot_only: BoolProperty(name="Affect Pivot Only",
+                             description="Align only the pivots: the objects' geometry and children stay where they are")
 
     @classmethod
     def poll(cls, context):
@@ -287,6 +289,7 @@ class MAXIMIZE_OT_align_apply(Operator):
         layout.row().prop(self, "orientation", text="", toggle=True)
         layout.label(text="Match Scale:")
         layout.row().prop(self, "match_scale", text="", toggle=True)
+        layout.prop(self, "pivot_only")
 
     def execute(self, context):
         target = bpy.data.objects.get(self.target)
@@ -300,6 +303,7 @@ class MAXIMIZE_OT_align_apply(Operator):
             return {'CANCELLED'}
         t_loc, t_rot, t_scale = target.matrix_world.decompose()
         t_euler = t_rot.to_euler()
+        skipped = []
         for obj in objects:
             delta = Vector()
             for axis in range(3):
@@ -313,8 +317,31 @@ class MAXIMIZE_OT_align_apply(Operator):
                     euler[axis] = t_euler[axis]
                 if self.match_scale[axis]:
                     scale[axis] = t_scale[axis]
-            obj.matrix_world = Matrix.LocRotScale(loc + delta, euler, scale)
+            new = Matrix.LocRotScale(loc + delta, euler, scale)
+            if self.pivot_only:
+                if not _move_pivot(obj, new):
+                    skipped.append(obj.name)
+                continue
+            obj.matrix_world = new
+        if skipped:
+            self.report({'WARNING'}, "Pivot not moved on instances (Make Unique first): " + ", ".join(skipped))
         return {'FINISHED'}
+
+
+def _move_pivot(obj, new):
+    """Give `obj` the world matrix `new` without moving its geometry or its children: the data takes
+    the opposite change. False where the data is shared (an instance) and stays as it is."""
+    data = obj.data
+    if data is not None and (data.users > 1 or not hasattr(data, "transform")):
+        return False
+    old = obj.matrix_world.copy()
+    children = [(child, child.matrix_world.copy()) for child in obj.children]
+    if data is not None:
+        data.transform(new.inverted_safe() @ old)
+    obj.matrix_world = new
+    for child, matrix in children:
+        child.matrix_world = matrix
+    return True
 
 
 class MAXIMIZE_OT_align(Operator):

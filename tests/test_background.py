@@ -84,6 +84,17 @@ def align():
     bpy.context.view_layer.update()
     return tuple(round(c,3) for c in a.location)
 check("align", align)
+def align_pivot_only():
+    bpy.ops.object.select_all(action='DESELECT')
+    bpy.ops.mesh.primitive_cube_add(location=(0, 0, 0)); a = bpy.context.active_object
+    bpy.ops.mesh.primitive_cube_add(location=(5, 0, 0)); t = bpy.context.active_object
+    t.select_set(False); a.select_set(True)
+    bpy.ops.maximize.align_apply(target=t.name, current_point='PIVOT', target_point='PIVOT', pivot_only=True)
+    bpy.context.view_layer.update()
+    xs = [(a.matrix_world @ v.co).x for v in a.data.vertices]
+    assert abs(a.location.x - 5.0) < 1e-5 and abs(min(xs) + 1.0) < 1e-5, (tuple(a.location), min(xs))
+    return tuple(round(c, 3) for c in a.location), round(min(xs), 3)
+check("align pivot only", align_pivot_only)
 def clone():
     bpy.ops.object.select_all(action='DESELECT')
     bpy.ops.maximize.add_primitive(kind='BOX'); o=bpy.context.active_object
