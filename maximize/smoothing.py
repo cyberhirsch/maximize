@@ -276,10 +276,12 @@ def draw_smoothing_groups(layout, context):
     row.operator("maximize.smoothing_auto")
     layout.operator("maximize.smoothing_from_sharp")
     # Max's ribbon: Smooth (one group across), Smooth 30 (Auto Smooth at 30 degrees), Hard (none).
+    from .mx_icons import mx_icon
     row = layout.row(align=True)
-    row.operator("maximize.smoothing_auto", text="Smooth").angle = math.pi
-    row.operator("maximize.smoothing_auto", text="Smooth 30").angle = math.radians(30.0)
-    row.operator("maximize.smoothing_clear", text="Hard")
+    row.operator("maximize.smoothing_auto", text="Smooth", icon=mx_icon('MX_PR_SMOOTH')).angle = math.pi
+    row.operator("maximize.smoothing_auto", text="Smooth 30",
+                 icon=mx_icon('MX_PR_SMOOTH_30')).angle = math.radians(30.0)
+    row.operator("maximize.smoothing_clear", text="Hard", icon=mx_icon('MX_PR_HARD'))
 
 
 classes = (

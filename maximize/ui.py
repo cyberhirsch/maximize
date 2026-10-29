@@ -16,6 +16,7 @@ from .shapes import EXTENDED_SPLINES, SPLINES
 from .nodes import draw_modifier_inputs
 from .preferences import draw_keymap_switch
 from .vocabulary import ALIASES
+from .mx_icons import has_icon, mx_icon
 
 
 def _aliases(layout, menu):
@@ -278,6 +279,21 @@ class ToolGrid:
         return self._column.row(align=True)
 
 
+# Moritz's Max icons for tool buttons, by operator (`maximize.` + key); stock Blender draws them without.
+_TOOL_ICONS = {
+    "grow": 'MX_MS_GROW', "shrink": 'MX_MS_SHRINK', "loop": 'MX_MS_LOOP', "ring": 'MX_MS_RING',
+    "cut": 'MX_ED_CUT', "paint_connect": 'MX_ED_P_CONNECT', "swift_loop": 'MX_ED_SWIFT_LOOP',
+    "quickslice": 'MX_ED_QSLICE', "relax": 'MX_GE_RELAX', "create_poly": 'MX_GE_CREATE',
+    "meshsmooth": 'MX_SD_MESHSMOOTH', "tessellate": 'MX_SD_TESSELLATE',
+    "hard": 'MX_PR_HARD', "smooth_edges": 'MX_PR_SMOOTH',
+}
+
+
+def tool_icon(op):
+    """The icon of the tool button for `maximize.<op>`: its Max icon in Moritz, else none."""
+    return mx_icon(_TOOL_ICONS.get(op, 'NONE'))
+
+
 def rollout(layout, idname, label, closed=False):
     """A Max rollout: a collapsible section; returns its body, or None while it is closed."""
     header, body = layout.panel(idname, default_closed=closed)
@@ -296,7 +312,7 @@ def draw_poly_selection(layout, context):
         # Row by row, keeping Max's pairs together: Grow / Shrink, Loop / Ring, Dot Loop / Dot Ring.
         grid = ToolGrid(layout)
         for op in ("grow", "shrink", "loop", "ring"):
-            grid.operator("maximize." + op)
+            grid.operator("maximize." + op, icon=tool_icon(op))
         grid.operator("maximize.dot_loop", text="Dot Loop").ring = False
         grid.operator("maximize.dot_loop", text="Dot Ring").ring = True
         for op in ("similar", "select_fill", "select_outline"):
@@ -335,16 +351,17 @@ def draw_poly_geometry(layout, context):
             # The Max vocabulary renames Blender's Bevel to Chamfer: keep Max's Bevel.
             grid.operator("maximize." + op, text="Bevel", translate=False)
         else:
-            grid.operator("maximize." + op)
+            grid.operator("maximize." + op, icon=tool_icon(op))
     grid.pad()
     row = layout.row(align=True)
-    row.operator("maximize.make_planar", text="Make Planar")
+    row.operator("maximize.make_planar", text="Make Planar", icon=mx_icon('MX_AL_MAKE_PLANAR'))
     for axis in "XYZ":
         row.operator("maximize.make_planar_axis", text=axis).axis = axis
     row = layout.row(align=True)
-    row.operator("maximize.align_to", text="To View").target = 'VIEW'
-    row.operator("maximize.align_to", text="To Grid").target = 'GRID'
-    layout.prop(context.scene.tool_settings, "use_transform_correct_face_attributes", text="Preserve UVs")
+    row.operator("maximize.align_to", text="To View", icon=mx_icon('MX_AL_TO_VIEW')).target = 'VIEW'
+    row.operator("maximize.align_to", text="To Grid", icon=mx_icon('MX_AL_TO_GRID')).target = 'GRID'
+    layout.prop(context.scene.tool_settings, "use_transform_correct_face_attributes", text="Preserve UVs",
+                icon=mx_icon('MX_PM_PRESERVE_UVS'))
     # Max's Edit Mesh Show Normals and Scale, for the main viewport (the panel is in the Command Panel).
     from .vocabulary import view3d_override
     view = view3d_override(context)
@@ -366,7 +383,7 @@ def draw_poly_geometry(layout, context):
         if body:
             grid = ToolGrid(body)
             for op in ops:
-                grid.operator("maximize." + op)
+                grid.operator("maximize." + op, icon=tool_icon(op))
             grid.pad()
             if idname == "maximize_poly_geometry_all":
                 # Max's ribbon Modify Mode: up and down the modifier stack.
@@ -418,7 +435,7 @@ def draw_poly_rollouts(layout, context, key):
     header, body = layout.panel(key + "_level", default_closed=False)
     header.label(text=label)
     # Max's caddy "Apply and Continue": run the last tool again with the same settings.
-    header.operator("screen.repeat_last", text="", icon='ADD')
+    header.operator("screen.repeat_last", text="", icon=mx_icon('MX_ED_REPEAT_LAST', 'ADD'))
     if body:
         grid = ToolGrid(body)
         from .caddy import tool_button
@@ -428,7 +445,7 @@ def draw_poly_rollouts(layout, context, key):
             elif op in _WIDE_TOOLS:
                 tool_button(grid.wide(), context, "maximize." + op)
             else:
-                tool_button(grid, context, "maximize." + op)
+                tool_button(grid, context, "maximize." + op, icon=tool_icon(op))
         grid.pad()
         if level in {'VERTEX', 'EDGE'}:
             from .poly_tools import draw_edge_properties
@@ -461,7 +478,10 @@ def draw_spline_selection(layout, context):
     row = layout.row(align=True)
     current = spline_level(context) if context.mode == 'EDIT_CURVE' else None
     for level, label in (('VERTEX', "Vertex"), ('EDGE', "Segment"), ('BORDER', "Spline")):
-        row.operator("maximize.subobject", text=label,
+        # Max's icon buttons where Moritz has the icons, else the names.
+        icon = 'MX_SPLINE_' + label.upper()
+        kwargs = {"text": "", "icon": icon} if has_icon(icon) else {"text": label}
+        row.operator("maximize.subobject", **kwargs,
                      depress=current == {'VERTEX': 'VERTEX', 'EDGE': 'SEGMENT', 'BORDER': 'SPLINE'}[level]).level = level
 
 
@@ -664,12 +684,21 @@ class MAXIMIZE_PT_freeform_rollout(_ModifierRollouts, Panel):
             freeform.draw(self.layout, context, context.object, mod)
 
 
+class MAXIMIZE_PT_vertex_paint_rollout(_ModifierRollouts, Panel):
+    bl_parent_id = "MOD_PT_VertexPaint"
+
+    def draw(self, context):
+        from . import vertex_paint
+        vertex_paint.draw(self.layout, context, self.custom_data)
+
+
 # Parent panels that exist only in Moritz (or in every Blender, for Multires and Geometry Nodes).
 _MODIFIER_ROLLOUTS = (
     MAXIMIZE_PT_edit_poly_rollouts,
     MAXIMIZE_PT_edit_spline_rollouts,
     MAXIMIZE_PT_sculpt_rollout,
     MAXIMIZE_PT_freeform_rollout,
+    MAXIMIZE_PT_vertex_paint_rollout,
 )
 
 
@@ -697,6 +726,11 @@ def draw_utilities(layout, context):
 class MAXIMIZE_PT_utilities(MaxPanel, Panel):
     bl_label = "Utilities"
     bl_options = {'DEFAULT_CLOSED'}
+
+    @classmethod
+    def poll(cls, _context):
+        # In Moritz this is the Command Panel's Utilities tab.
+        return not hasattr(bpy.types, "PROPERTIES_PT_utilities")
 
     def draw(self, context):
         draw_utilities(self.layout, context)
@@ -814,6 +848,9 @@ def register():
         bpy.types.PROPERTIES_PT_create.object_type_draw = draw_object_types
         if hasattr(bpy.types.PROPERTIES_PT_create_category, "subcategory_draw"):
             bpy.types.PROPERTIES_PT_create_category.subcategory_draw = draw_subcategory
+    if hasattr(bpy.types, "PROPERTIES_PT_utilities"):
+        # Moritz's Command Panel Utilities tab.
+        bpy.types.PROPERTIES_PT_utilities.utilities_draw = draw_utilities
 
 
 def unregister():
@@ -822,6 +859,8 @@ def unregister():
         bpy.types.PROPERTIES_PT_create.object_type_draw = None
     if getattr(getattr(bpy.types, "PROPERTIES_PT_create_category", None), "subcategory_draw", None) is draw_subcategory:
         bpy.types.PROPERTIES_PT_create_category.subcategory_draw = None
+    if getattr(getattr(bpy.types, "PROPERTIES_PT_utilities", None), "utilities_draw", None) is draw_utilities:
+        bpy.types.PROPERTIES_PT_utilities.utilities_draw = None
     for prop, _items in SUBCATEGORIES.values():
         delattr(bpy.types.WindowManager, prop)
     del bpy.types.WindowManager.maximize_start_new_shape

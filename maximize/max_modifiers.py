@@ -385,7 +385,11 @@ def register():
     from .vocabulary import modifier_list
     mlist = modifier_list()
     if mlist is not None:
+        native = {it.identifier for it in bpy.types.Modifier.bl_rna.properties["type"].enum_items}
         for kind, (_name, _build, label, types) in KINDS.items():
+            if kind == 'NORMAL' and 'MAX_NORMAL' in native:
+                # Moritz's native Normal (Unify and Flip) takes the list entry.
+                continue
             mlist.register_entry(label, "maximize.add_" + kind.lower(), _KEYWORDS[kind], sorted(types))
 
 

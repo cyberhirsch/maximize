@@ -568,7 +568,8 @@ def draw(layout, context, obj):
         return
     mod = active_edit_spline(obj)
     if mod is None:
-        layout.operator("maximize.edit_spline_add", icon='MODIFIER')
+        from .mx_icons import mx_icon
+        layout.operator("maximize.edit_spline_add", icon=mx_icon('MX_MOD_EDIT_SPLINE', 'MODIFIER'))
         return
     layout.label(text="1, 2, 3 edit at this level", icon='INFO')
     if is_native(mod):

@@ -223,7 +223,8 @@ def draw(layout, context, obj, mod=None):
     if mod is None and not sculpting:
         return
     box = layout.box()
-    box.label(text="Sculpt", icon='SCULPTMODE_HLT')
+    from .mx_icons import mx_icon
+    box.label(text="Sculpt", icon=mx_icon('MX_MOD_SCULPT', 'SCULPTMODE_HLT'))
     box.operator("maximize.sculpt_toggle", text="Leave Sculpt" if sculpting else "Sculpt",
                  depress=sculpting)
     if mod is not None and mod.type == 'MULTIRES':
@@ -270,7 +271,9 @@ def _draw_add_menu(self, context):
     obj = context.object
     if obj is not None and obj.type == 'MESH':
         self.layout.separator()
-        self.layout.operator("maximize.sculpt_add", text="Sculpt (Max)", icon='SCULPTMODE_HLT')
+        from .mx_icons import mx_icon
+        self.layout.operator("maximize.sculpt_add", text="Sculpt (Max)",
+                             icon=mx_icon('MX_MOD_SCULPT', 'SCULPTMODE_HLT'))
 
 
 _MENUS = ("OBJECT_MT_modifier_add_flat", "OBJECT_MT_modifier_add")

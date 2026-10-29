@@ -1157,8 +1157,19 @@ class MAXIMIZE_OT_freeform_solve(Operator):
 # Panel
 
 
+# Moritz's Max icons for the PolyDraw buttons (Draw On, tools, Conform brushes, draw kinds).
+_DRAW_ON_ICONS = {'GRID': 'MX_FF_GRID', 'SURFACE': 'MX_FF_PICK_SURFACE'}
+_TOOL_ICONS = {'DRAG': 'MX_FF_DRAG', 'STEP_BUILD': 'MX_FF_STEP_BUILD', 'EXTEND': 'MX_FF_EXTEND',
+               'OPTIMIZE': 'MX_FF_OPTIMIZE'}
+_CONFORM_ICONS = {'CONFORM': 'MX_FF_CONFORM', 'MOVE': 'MX_FF_CONFORM_MOVE', 'ROTATE': 'MX_FF_CONFORM_ROTATE',
+                  'SCALE': 'MX_FF_CONFORM_SCALE', 'RELAX': 'MX_FF_CONFORM_RELAX'}
+_KIND_ICONS = {'STRIPS': 'MX_FF_STRIPS', 'SURFACE': 'MX_FF_SURFACE', 'SHAPES': 'MX_FF_SHAPES',
+               'TOPOLOGY': 'MX_FF_TOPOLOGY', 'BRANCHES': 'MX_FF_BRANCHES', 'SPLINES': 'MX_FF_SPLINES'}
+
+
 def draw(layout, context, obj, mod):
     """The Freeform modifier's rollouts: Draw On, PolyDraw, Display."""
+    from .mx_icons import mx_icon
     from .ui import ToolGrid, rollout
     s = settings(context)
     # Draw On (Surface, Offset, Conform) are the modifier's own inputs, above.
@@ -1167,16 +1178,19 @@ def draw(layout, context, obj, mod):
     if body:
         if context.mode != 'EDIT_MESH':
             body.label(text="Edit the mesh to draw on the surface", icon='INFO')
-        body.row(align=True).prop(s, "draw_on", expand=True)
+        row = body.row(align=True)
+        for ident, _text, _d in DRAW_ON:
+            row.prop_enum(s, "draw_on", ident, icon=mx_icon(_DRAW_ON_ICONS.get(ident, 'NONE')))
         grid = ToolGrid(body)
         for tool, text in (('DRAG', "Drag"), ('STEP_BUILD', "Step Build"), ('EXTEND', "Extend"),
                            ('OPTIMIZE', "Optimize")):
-            grid.operator("maximize.freeform_tool", text=text).tool = tool
+            grid.operator("maximize.freeform_tool", text=text, icon=mx_icon(_TOOL_ICONS[tool])).tool = tool
         for mode, text, _d in CONFORM_BRUSHES:
-            grid.operator("maximize.freeform_conform_brush", text=text).mode = mode
+            grid.operator("maximize.freeform_conform_brush", text=text,
+                          icon=mx_icon(_CONFORM_ICONS[mode])).mode = mode
         grid.operator("maximize.freeform_conform")
         for kind, text, _d in DRAW_KINDS:
-            grid.operator("maximize.freeform_draw", text=text).kind = kind
+            grid.operator("maximize.freeform_draw", text=text, icon=mx_icon(_KIND_ICONS[kind])).kind = kind
         grid.pad()
         col = body.column(align=True)
         col.prop(s, "min_distance")
@@ -1210,7 +1224,9 @@ def _draw_add_menu(self, context):
         return
     obj = context.object
     if obj is not None and obj.type == 'MESH':
-        self.layout.operator("maximize.freeform_add", text="Freeform (Max)", icon='GREASEPENCIL')
+        from .mx_icons import mx_icon
+        self.layout.operator("maximize.freeform_add", text="Freeform (Max)",
+                             icon=mx_icon('MX_MOD_RETOPO', 'GREASEPENCIL'))
 
 
 _MENUS = ("OBJECT_MT_modifier_add_flat", "OBJECT_MT_modifier_add")

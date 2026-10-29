@@ -497,10 +497,11 @@ class MAXIMIZE_PT_edit_poly(Panel):
             layout.operator("maximize.edit_poly_end", icon='LOOP_BACK')
             return
         col = layout.column(align=True)
-        col.operator("maximize.edit_poly_add", icon='MODIFIER')
+        from .mx_icons import mx_icon
+        col.operator("maximize.edit_poly_add", icon=mx_icon('MX_MOD_EDIT_POLY', 'MODIFIER'))
         row = col.row(align=True)
         row.operator("maximize.collapse_to")
-        row.operator("maximize.collapse_all")
+        row.operator("maximize.collapse_all", icon=mx_icon('MX_PM_COLLAPSE_STACK'))
         mod = active_edit_poly(obj)
         if mod is not None:
             layout.label(text="1–5 edit at this level", icon='INFO')

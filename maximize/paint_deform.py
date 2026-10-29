@@ -45,6 +45,11 @@ PAINT_BRUSHES = (
     ('REVERT', "Revert", "Paint: bring the mesh back to how it was when the brush started"),
 )
 _DRAGS = {'SHIFT', 'SHIFT_ROTATE', 'SHIFT_SCALE'}
+# Moritz's Max icons for the brushes (Revert has none).
+_BRUSH_ICONS = {'SHIFT': 'MX_PD_SHIFT', 'SHIFT_ROTATE': 'MX_PD_SHIFT_ROTATE', 'SHIFT_SCALE': 'MX_PD_SHIFT_SCALE',
+                'PUSH_PULL': 'MX_PD_PUSH_PULL', 'RELAX': 'MX_PD_RELAX_SOFTEN', 'FLATTEN': 'MX_PD_FLATTEN',
+                'PINCH': 'MX_PD_PINCH_SPREAD', 'SMUDGE': 'MX_PD_SMUDGE', 'NOISE': 'MX_PD_NOISE',
+                'EXAGGERATE': 'MX_PD_EXAGGERATE'}
 
 
 class MaximizePaintDeformSettings(PropertyGroup):
@@ -393,17 +398,23 @@ class MAXIMIZE_OT_paint_deform(Operator):
 
 def draw(layout, context):
     """The Paint Deform rollout's contents (Edit Poly)."""
+    from .mx_icons import mx_icon
     from .ui import ToolGrid
     s = settings(context)
     grid = ToolGrid(layout)
     for mode, text, _d in PAINT_BRUSHES:
-        grid.operator("maximize.paint_deform", text=text).mode = mode
+        grid.operator("maximize.paint_deform", text=text, icon=mx_icon(_BRUSH_ICONS.get(mode, 'NONE'))).mode = mode
     grid.pad()
     row = layout.row(align=True)
     row.menu("MAXIMIZE_MT_paint_deform_presets", text=MAXIMIZE_MT_paint_deform_presets.bl_label)
     row.operator("maximize.paint_deform_preset_add", text="", icon='ADD')
     row.operator("maximize.paint_deform_preset_add", text="", icon='REMOVE').remove_active = True
-    layout.prop(s, "picked", icon='LOCKED' if s.picked else 'UNLOCKED')
+    icon = mx_icon('MX_PD_PICK_LOCKED')
+    if icon != 'NONE':
+        # One icon for Pick Locked: the pressed-in button shows the state.
+        layout.prop(s, "picked", icon=icon, toggle=True)
+    else:
+        layout.prop(s, "picked", icon='LOCKED' if s.picked else 'UNLOCKED')
     row = layout.row(align=True)
     row.label(text="Mirror")
     row.prop(s, "mirror", text="", toggle=True)

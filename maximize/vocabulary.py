@@ -61,8 +61,8 @@ MAX_TERMS = {
     "Shrinkwrap": "Conform",
     "UV Project": "UVW Map (Blender)",
     "Unwrap": "Unwrap UVW",
-    # Modifiers whose Blender name is used nowhere else (Skin, Smooth, Armature and Wireframe need
-    # their own translation context first: the modifier list names them meanwhile).
+    # Modifiers whose Blender name is used nowhere else (Skin, Smooth, Armature and Wireframe are in
+    # MODIFIER_TERMS).
     "Screw": "Lathe",
     "Decimate": "ProOptimizer",
     "Cast": "Spherify",
@@ -87,6 +87,15 @@ MAX_TERMS = {
 }
 
 _CONTEXTS = ("*", "Operator", "ID", "Modifier")
+
+# Modifier names only (Moritz gives modifier type names their own "Modifier" translation context):
+# these words also mean other things elsewhere (Armature the object type, Wireframe the shading).
+MODIFIER_TERMS = {
+    "Armature": "Skin",
+    "Skin": "Skin (Blender)",
+    "Smooth": "Smooth (Blender)",
+    "Wireframe": "Lattice",
+}
 
 NAME_SCHEMES = (
     ('AUTO', "Follow Keymap", "Max's names with the Max keymap, Moritz's with the Moritz keymap, "
@@ -121,6 +130,7 @@ def _blender_tooltips():
 
 def _translation_dict(scheme):
     terms = {(ctx, src): dst for src, dst in MAX_TERMS.items() for ctx in _CONTEXTS}
+    terms.update({("Modifier", src): dst for src, dst in MODIFIER_TERMS.items()})
     if scheme == 'MORITZ':
         terms.update(_blender_tooltips())
     return {"en_US": terms, "en_GB": terms}

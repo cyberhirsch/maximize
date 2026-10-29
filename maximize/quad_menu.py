@@ -14,6 +14,8 @@ import bpy
 from bpy.props import BoolProperty
 from bpy.types import Panel
 
+from .mx_icons import mx_icon
+
 # Quadrant entries: ("op", idname, text, props, options), ("menu", idname, text), ("gap",) and
 # ("ops", [(idname, text, props), ...]) for a row of small buttons. Every entry is one row high,
 # so quadrants can be padded to line up at the cursor.
@@ -21,6 +23,12 @@ from bpy.types import Panel
 
 def _tool(text, tool, icon):
     return ("op", "wm.tool_set_by_id", text, {"name": tool}, {"icon": icon})
+
+
+def _mx(name):
+    """Entry options with Moritz's Max icon `name`, or none without it."""
+    icon = mx_icon(name)
+    return {"icon": icon} if icon != 'NONE' else {}
 
 
 def _state(on):
@@ -91,13 +99,13 @@ def _tools_object(context):
     obj = context.active_object
     if obj is not None and obj.type == 'CURVE':
         first = [("op", "maximize.convert_spline", "Convert to Editable Spline", {}, {}),
-                 ("op", "maximize.edit_spline_add", "Edit Spline Modifier", {}, {})]
+                 ("op", "maximize.edit_spline_add", "Edit Spline Modifier", {}, _mx('MX_MOD_EDIT_SPLINE'))]
     else:
-        first = [("op", "maximize.edit_poly_add", "Edit Poly Modifier", {}, {})]
+        first = [("op", "maximize.edit_poly_add", "Edit Poly Modifier", {}, _mx('MX_MOD_EDIT_POLY'))]
     return first + [
         ("op", "maximize.convert_poly", "Convert to Editable Poly", {}, {}),
-        ("op", "maximize.attach", "Attach", {}, {}),
-        ("op", "maximize.collapse_all", "Collapse All", {}, {}),
+        ("op", "maximize.attach", "Attach", {}, _mx('MX_GE_ATTACH')),
+        ("op", "maximize.collapse_all", "Collapse All", {}, _mx('MX_PM_COLLAPSE_STACK')),
         ("op", "maximize.align", "Align", {}, {}),
         ("op", "maximize.array", "Array...", {}, {}),
         ("op", "maximize.spacing", "Spacing Tool...", {}, {}),
@@ -118,8 +126,8 @@ def _tools_poly(_context):
         ("op", "maximize.bevel_poly", "Bevel", {}, {"translate": False}),
         ("op", "maximize.chamfer", "Chamfer", {}, {}),
         ("op", "maximize.inset", "Inset", {}, {}),
-        ("op", "maximize.cut", "Cut", {}, {}),
-        ("op", "maximize.swift_loop", "Swift Loop", {}, {}),
+        ("op", "maximize.cut", "Cut", {}, _mx('MX_ED_CUT')),
+        ("op", "maximize.swift_loop", "Swift Loop", {}, _mx('MX_ED_SWIFT_LOOP')),
         ("op", "maximize.connect", "Connect", {}, {}),
         ("op", "maximize.weld", "Weld", {}, {}),
         ("op", "maximize.target_weld", "Target Weld", {}, {}),
