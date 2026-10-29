@@ -303,10 +303,22 @@ classes = tuple(_alias_class(ident, label, target, props, desc)
                 for ident, label, target, props, _menu, desc in ALIASES)
 
 
+def modifier_list():
+    """Moritz's modifier list module (Max names and search keywords), or None in stock Blender."""
+    try:
+        from bl_operators import moritz_modifier_list
+    except ImportError:
+        return None
+    return moritz_modifier_list
+
+
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
     apply_scheme()
+    mlist = modifier_list()
+    if mlist is not None:
+        mlist.name_scheme = lambda: _current
     bpy.app.timers.register(_watch_keymap, first_interval=1.0, persistent=True)
 
 
@@ -314,5 +326,8 @@ def unregister():
     if bpy.app.timers.is_registered(_watch_keymap):
         bpy.app.timers.unregister(_watch_keymap)
     set_scheme('BLENDER')
+    mlist = modifier_list()
+    if mlist is not None:
+        mlist.name_scheme = lambda: 'BLENDER'
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)

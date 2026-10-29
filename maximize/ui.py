@@ -11,7 +11,7 @@ import bpy.utils.previews
 from bpy.props import BoolProperty, EnumProperty, StringProperty
 from bpy.types import Menu, Operator, Panel
 
-from . import compound, primitives, uvw_map
+from . import compound, primitives, uvw_map, vocabulary
 from .shapes import EXTENDED_SPLINES, SPLINES
 from .nodes import draw_modifier_inputs
 from .preferences import draw_keymap_switch
@@ -759,6 +759,9 @@ def draw_levels(layout, context):
 
 def _draw_add_menu(self, _context):
     """Moritz's Add Modifier menu: Maximize's own modifiers and the Max names (Modifier List)."""
+    if vocabulary.modifier_list() is not None:
+        # Moritz lists them itself, by name scheme (`register` adds the entries).
+        return
     layout = self.layout
     layout.separator()
     layout.operator("maximize.uvw_map", text="UVW Map")
@@ -781,6 +784,9 @@ def register():
         bpy.types.DATA_PT_modifiers.moritz_base_entry = primitives.base_entry
     if hasattr(bpy.types, "OBJECT_MT_modifier_add_flat"):
         bpy.types.OBJECT_MT_modifier_add_flat.append(_draw_add_menu)
+    mlist = vocabulary.modifier_list()
+    if mlist is not None:
+        mlist.register_entry("UVW Map", "maximize.uvw_map", "uv mapping planar box cylindrical spherical gizmo")
     bpy.types.VIEW3D_MT_editor_menus.append(_header_menu)
     # Moritz only: Blender's header has no hook.
     if hasattr(bpy.types.VIEW3D_HT_header, "select_mode_draw"):
@@ -815,6 +821,9 @@ def unregister():
     bpy.types.VIEW3D_MT_editor_menus.remove(_header_menu)
     if hasattr(bpy.types, "OBJECT_MT_modifier_add_flat"):
         bpy.types.OBJECT_MT_modifier_add_flat.remove(_draw_add_menu)
+    mlist = vocabulary.modifier_list()
+    if mlist is not None:
+        mlist.unregister_entry("maximize.uvw_map")
     if getattr(bpy.types.DATA_PT_modifiers, "moritz_base_draw", None) is draw_base:
         bpy.types.DATA_PT_modifiers.moritz_base_draw = None
         bpy.types.DATA_PT_modifiers.moritz_base_entry = None

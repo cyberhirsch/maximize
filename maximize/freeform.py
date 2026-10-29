@@ -1200,7 +1200,14 @@ def draw(layout, context, obj, mod):
             body.prop(overlay, "retopology_offset", text="Offset")
 
 
+def _in_moritz_list():
+    from .vocabulary import modifier_list
+    return modifier_list() is not None
+
+
 def _draw_add_menu(self, context):
+    if _in_moritz_list():
+        return
     obj = context.object
     if obj is not None and obj.type == 'MESH':
         self.layout.operator("maximize.freeform_add", text="Freeform (Max)", icon='GREASEPENCIL')
@@ -1224,6 +1231,9 @@ def register():
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.types.Scene.maximize_freeform = PointerProperty(type=MaximizeFreeformSettings)
+    from .vocabulary import modifier_list
+    if modifier_list() is not None:
+        modifier_list().register_entry("Freeform (Max)", "maximize.freeform_add", "retopology polydraw draw topology conform")
     for name in _MENUS:
         menu = getattr(bpy.types, name, None)
         if menu is not None:
@@ -1232,6 +1242,9 @@ def register():
 
 
 def unregister():
+    from .vocabulary import modifier_list
+    if modifier_list() is not None:
+        modifier_list().unregister_entry("maximize.freeform_add")
     for name in _MENUS:
         menu = getattr(bpy.types, name, None)
         if menu is not None:

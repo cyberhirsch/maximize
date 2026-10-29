@@ -259,7 +259,14 @@ classes = (
 )
 
 
+def _in_moritz_list():
+    from .vocabulary import modifier_list
+    return modifier_list() is not None
+
+
 def _draw_add_menu(self, context):
+    if _in_moritz_list():
+        return
     obj = context.object
     if obj is not None and obj.type == 'MESH':
         self.layout.separator()
@@ -272,6 +279,9 @@ _MENUS = ("OBJECT_MT_modifier_add_flat", "OBJECT_MT_modifier_add")
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
+    from .vocabulary import modifier_list
+    if modifier_list() is not None:
+        modifier_list().register_entry("Sculpt (Max)", "maximize.sculpt_add", "multires sculpt brushes dyntopo")
     for name in _MENUS:
         menu = getattr(bpy.types, name, None)
         if menu is not None:
@@ -280,6 +290,9 @@ def register():
 
 
 def unregister():
+    from .vocabulary import modifier_list
+    if modifier_list() is not None:
+        modifier_list().unregister_entry("maximize.sculpt_add")
     for name in _MENUS:
         menu = getattr(bpy.types, name, None)
         if menu is not None:
