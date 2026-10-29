@@ -6,12 +6,13 @@
 Select ID with Clear Selection, select by name), Make Planar X / Y / Z, Create Shape, Outline,
 Max-style vertex / edge / border Extrude, Extrude Along Spline, Hinge From Edge, Insert Vertex,
 Slice Plane (Split, Reset Plane), Named Selections Copy / Paste, edge / vertex Crease and Weight,
-Show Cage.
+Show Cage, and Edit Mesh's Explode.
 
 Max's material IDs are Blender's material slots, counted from 1. Crease and Weight are Blender's
 own `crease_edge`, `crease_vert` and `bevel_weight_edge` attributes. Nothing new is stored.
 """
 
+import bisect
 import math
 
 import bmesh
@@ -1244,7 +1245,88 @@ class MAXIMIZE_OT_set_flow(_EditMesh, Operator):
         return {'FINISHED'}
 
 
+def angle_clusters(faces, angle):
+    """Groups of `faces` joined across edges whose two faces meet within `angle` (radians)."""
+    faces = set(faces)
+    seen = set()
+    groups = []
+    for start in faces:
+        if start in seen:
+            continue
+        group = [start]
+        seen.add(start)
+        stack = [start]
+        while stack:
+            face = stack.pop()
+            for edge in face.edges:
+                for other in edge.link_faces:
+                    if other in faces and other not in seen and face.normal.angle(other.normal, 0.0) <= angle:
+                        seen.add(other)
+                        group.append(other)
+                        stack.append(other)
+        groups.append(group)
+    return groups
+
+
+class MAXIMIZE_OT_explode(_EditMesh, Operator):
+    """Explode (Max's Edit Mesh): break the selected polygons (all, if none) into pieces wherever
+    neighbors meet at more than the angle, as elements or as separate objects"""
+    bl_idname = "maximize.explode"
+    bl_label = "Explode"
+
+    angle: FloatProperty(name="Angle", subtype='ANGLE', default=math.radians(24.0), min=0.0, max=math.pi)
+    target: EnumProperty(name="To", items=(
+        ('OBJECTS', "Objects", "Each piece becomes an object of its own"),
+        ('ELEMENTS', "Elements", "Each piece becomes an element of this mesh")), default='OBJECTS')
+
+    def execute(self, context):
+        obj = context.edit_object
+        me = obj.data
+        bm = bmesh.from_edit_mesh(me)
+        faces = [f for f in bm.faces if f.select] or list(bm.faces)
+        groups = angle_clusters(faces, self.angle)
+        piece = {f: i for i, group in enumerate(groups) for f in group}
+        # Split the edges between pieces, and the edges around the polygons that explode.
+        cuts = [e for e in bm.edges if any(f in piece for f in e.link_faces) and
+                len({piece.get(f, -1) for f in e.link_faces}) > 1]
+        bmesh.ops.split_edges(bm, edges=cuts)
+        bmesh.update_edit_mesh(me)
+        if self.target == 'OBJECTS' and len(groups) > 0:
+            pieces = [[f.index for f in group] for group in groups]
+            # Every piece but the rest of the mesh leaves; with everything exploding, the last
+            # piece stays as this object.
+            if len(faces) == len(bm.faces):
+                pieces = pieces[:-1]
+            for indices in pieces:
+                bm = bmesh.from_edit_mesh(me)
+                bm.faces.ensure_lookup_table()
+                for f in bm.faces:
+                    f.select = False
+                for e in bm.edges:
+                    e.select = False
+                for v in bm.verts:
+                    v.select = False
+                for i in indices:
+                    bm.faces[i].select = True
+                bm.select_flush_mode()
+                bmesh.update_edit_mesh(me)
+                bpy.ops.mesh.separate(type='SELECTED')
+                # Separating renumbers the faces left behind: shift the later pieces down.
+                removed = sorted(indices)
+                for other in pieces:
+                    if other is indices:
+                        continue
+                    other[:] = [i - _count_below(removed, i) for i in other]
+        self.report({'INFO'}, "{:d} pieces".format(len(groups)))
+        return {'FINISHED'}
+
+
+def _count_below(sorted_values, value):
+    return bisect.bisect_left(sorted_values, value)
+
+
 classes = (
+    MAXIMIZE_OT_explode,
     MAXIMIZE_OT_set_flow,
     MAXIMIZE_OT_quadrify_all,
     MAXIMIZE_OT_dot_loop,

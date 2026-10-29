@@ -345,11 +345,21 @@ def draw_poly_geometry(layout, context):
     row.operator("maximize.align_to", text="To View").target = 'VIEW'
     row.operator("maximize.align_to", text="To Grid").target = 'GRID'
     layout.prop(context.scene.tool_settings, "use_transform_correct_face_attributes", text="Preserve UVs")
+    # Max's Edit Mesh Show Normals and Scale, for the main viewport (the panel is in the Command Panel).
+    from .vocabulary import view3d_override
+    view = view3d_override(context)
+    overlay = view["area"].spaces.active.overlay if view else None
+    if overlay is not None:
+        row = layout.row(align=True)
+        row.prop(overlay, "show_face_normals", text="Show Normals")
+        sub = row.row(align=True)
+        sub.active = overlay.show_face_normals
+        sub.prop(overlay, "normals_length", text="Scale")
     from .poly_tools import draw_extras
     draw_extras(layout, context)
     # Max's ribbon Geometry (All) and Subdivision, used less: closed sub-sections.
     for idname, label, ops in (("maximize_poly_geometry_all", "Geometry (All)",
-                                ("quadrify_all", "quadrify", "symmetrize")),
+                                ("quadrify_all", "quadrify", "symmetrize", "explode")),
                                ("maximize_poly_subdivision", "Subdivision", ("meshsmooth", "tessellate"))):
         header, body = layout.panel(idname, default_closed=True)
         header.label(text=label)

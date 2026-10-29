@@ -139,7 +139,35 @@ from maximize import smoothing  # noqa: E402
 all_mask, any_mask = smoothing.selection_groups(bpy.context)
 check(bin(any_mask).count("1") >= 2, "Smooth 30: the cube's faces in several groups, got {:b}".format(any_mask))
 
+# Explode: a cube's six faces meet at 90 degrees, so it explodes into six pieces.
 bpy.ops.object.mode_set(mode='OBJECT')
+for o in list(bpy.data.objects):
+    bpy.data.objects.remove(o)
+bpy.ops.mesh.primitive_cube_add()
+bpy.ops.object.mode_set(mode='EDIT')
+bpy.ops.mesh.select_all(action='DESELECT')
+bpy.ops.maximize.explode(target='ELEMENTS')
+bpy.ops.object.mode_set(mode='OBJECT')
+cube = bpy.context.active_object
+check(len(cube.data.vertices) == 24 and len(cube.data.polygons) == 6, "Explode to Elements: 6 loose faces")
+bpy.ops.object.mode_set(mode='EDIT')
+bpy.ops.mesh.select_all(action='SELECT')
+bpy.ops.mesh.remove_doubles()
+bpy.ops.mesh.select_all(action='DESELECT')
+bpy.ops.maximize.explode(target='OBJECTS')
+bpy.ops.object.mode_set(mode='OBJECT')
+meshes = [o for o in bpy.data.objects if o.type == 'MESH']
+check(len(meshes) == 6 and all(len(o.data.polygons) == 1 for o in meshes), "Explode to Objects: 6 objects")
+# A sphere's faces meet at small angles: with a wide angle it stays one piece.
+for o in list(bpy.data.objects):
+    bpy.data.objects.remove(o)
+bpy.ops.mesh.primitive_uv_sphere_add(segments=32, ring_count=16)
+bpy.ops.object.mode_set(mode='EDIT')
+bpy.ops.mesh.select_all(action='DESELECT')
+bpy.ops.maximize.explode(target='OBJECTS', angle=0.6)
+bpy.ops.object.mode_set(mode='OBJECT')
+check(len([o for o in bpy.data.objects if o.type == 'MESH']) == 1, "Explode: smooth sphere stays whole")
+
 print("FAILURES", len(failures))
 if failures:
     sys.exit(1)
