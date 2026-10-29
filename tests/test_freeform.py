@@ -192,6 +192,27 @@ p = world @ bm.verts[side].co
 check(abs(p.y - 0.3) < 0.03 and on_sphere(bm.verts[side]), "Conform Scale: twice as far, on the sphere ({:.3f})".format(p.y))
 bpy.ops.object.mode_set(mode='OBJECT')
 
+# Draw On: the grid (the ground, without a view), and the selected polygons.
+grid_surface = freeform.Surface(ctx, patch2, 'GRID')
+check(grid_surface.usable and (grid_surface.nearest(Vector((1.0, 2.0, 3.0))) - Vector((1.0, 2.0, 0.0))).length < 1e-5,
+      "Draw On Grid: onto the ground")
+check((grid_surface.along(Vector((1.0, 0.0, 3.0)), Vector((1.0, 0.0, -1.0))) - Vector((4.0, 0.0, 0.0))).length < 1e-5,
+      "Draw On Grid: along a normal")
+bpy.ops.mesh.primitive_plane_add(size=4.0, location=(0.0, 0.0, 0.5))
+floor = ctx.active_object
+bpy.ops.object.mode_set(mode='EDIT')
+bpy.ops.mesh.select_all(action='DESELECT')
+check(not freeform.Surface(ctx, floor, 'SELECTION').usable, "Draw On Selection: nothing selected, nothing to draw on")
+bpy.ops.mesh.select_all(action='SELECT')
+sel_surface = freeform.Surface(ctx, floor, 'SELECTION')
+hit = sel_surface.nearest(Vector((0.3, 0.2, 2.0)))
+check(hit is not None and abs(hit.z - 0.5) < 1e-5 and abs(hit.x - 0.3) < 1e-5, "Draw On Selection: onto the selected polygon")
+ctx.scene.maximize_freeform.draw_on = 'GRID'
+check(bpy.ops.maximize.freeform_conform.poll(), "Conform All works without a Surface object on the grid")
+ctx.scene.maximize_freeform.draw_on = 'SURFACE'
+check(not bpy.ops.maximize.freeform_conform.poll(), "...but not on Surface without one")
+bpy.ops.object.mode_set(mode='OBJECT')
+
 # Builders, on an empty Freeform object.
 bpy.ops.object.mode_set(mode='OBJECT')
 for o in ctx.selected_objects:

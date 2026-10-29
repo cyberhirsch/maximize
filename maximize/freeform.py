@@ -171,20 +171,63 @@ class MAXIMIZE_OT_freeform_new_object(Operator):
 # The surface
 
 
-class Surface:
-    """Ray casts onto the Draw On object (or, without one, onto a plane facing the view through the
-    3D cursor), in world space."""
+DRAW_ON = (
+    ('GRID', "Grid", "Draw on the grid: the ground plane, or in a Top / Front / Side view that view's plane "
+     "through the origin"),
+    ('SURFACE', "Surface", "Draw on the Surface object (the modifier's Surface input)"),
+    ('SELECTION', "Selection", "Draw on the selected polygons of the mesh itself"),
+)
 
-    def __init__(self, context, obj):
-        self.target = target_of(obj)
+
+def _grid_plane(rv3d):
+    """The plane Max's home grid shows in a view: in an axis-aligned orthographic view the plane
+    through the origin facing it, otherwise the ground."""
+    if rv3d is not None and rv3d.view_perspective == 'ORTHO' and getattr(rv3d, "is_orthographic_side_view", False):
+        axis = rv3d.view_rotation @ Vector((0.0, 0.0, 1.0))
+        return Vector(), Vector([round(c) for c in axis]).normalized()
+    return Vector(), Vector((0.0, 0.0, 1.0))
+
+
+class Surface:
+    """What the Freeform tools draw on, in world space: the Surface object, the grid or the
+    selected polygons (Draw On). Without any, a plane facing the view through the 3D cursor."""
+
+    def __init__(self, context, obj, draw_on=None, rv3d=None):
+        draw_on = draw_on or settings(context).draw_on
         self.offset = offset_of(obj)
         self.tree = None
-        if self.target is not None and self.target.type == 'MESH':
-            depsgraph = context.evaluated_depsgraph_get()
-            self.tree = BVHTree.FromObject(self.target, depsgraph)
-            self.matrix = self.target.matrix_world.copy()
+        self.plane = None
+        if draw_on == 'GRID':
+            self.plane = _grid_plane(rv3d if rv3d is not None else getattr(context, "region_data", None))
+        elif draw_on == 'SELECTION':
+            self._from_selection(obj)
+        else:
+            target = target_of(obj)
+            if target is not None and target.type == 'MESH':
+                self.tree = BVHTree.FromObject(target, context.evaluated_depsgraph_get())
+                self.matrix = target.matrix_world.copy()
+        if self.tree is not None:
             self.inverse = self.matrix.inverted_safe()
         self.cursor = context.scene.cursor.location.copy()
+
+    def _from_selection(self, obj):
+        """The selected polygons as they are now (what is drawn later doesn't count)."""
+        if obj.mode == 'EDIT':
+            bm = bmesh.from_edit_mesh(obj.data)
+            faces = [f for f in bm.faces if f.select and not f.hide]
+            if faces:
+                self.tree = BVHTree.FromPolygons([v.co.copy() for v in bm.verts],
+                                                 [[v.index for v in f.verts] for f in faces])
+        else:
+            mesh = obj.data
+            polys = [p.vertices[:] for p in mesh.polygons if p.select]
+            if polys:
+                self.tree = BVHTree.FromPolygons([v.co.copy() for v in mesh.vertices], polys)
+        self.matrix = obj.matrix_world.copy()
+
+    def _lift(self, location, normal):
+        n = (self.inverse.to_3x3().transposed() @ normal).normalized()
+        return self.matrix @ location + n * self.offset, n
 
     def cast(self, region, rv3d, mouse):
         """(point, normal) under the mouse, lifted by the Offset; None where the surface isn't."""
@@ -196,25 +239,53 @@ class Surface:
             location, normal, _index, _distance = self.tree.ray_cast(o, d)
             if location is None:
                 return None
-            n = (self.inverse.to_3x3().transposed() @ normal).normalized()
-            return self.matrix @ location + n * self.offset, n
+            return self._lift(location, normal)
+        if self.plane is not None:
+            point = self._plane_hit(origin, direction)
+            if point is None:
+                return None
+            normal = self._plane_normal(direction)
+            return point + normal * self.offset, normal
         point = view3d_utils.region_2d_to_location_3d(region, rv3d, mouse, self.cursor)
         return point, -direction.normalized()
 
+    def _plane_normal(self, facing):
+        """The plane's normal on the side `facing` (a view or vertex direction) comes from."""
+        normal = self.plane[1]
+        return -normal if normal.dot(facing) > 0.0 else normal.copy()
+
+    def _plane_hit(self, origin, direction):
+        from mathutils.geometry import intersect_line_plane
+        co, normal = self.plane
+        if abs(direction.dot(normal)) < 1e-6:
+            return None
+        return intersect_line_plane(origin, origin + direction, co, normal)
+
     def nearest(self, point):
         """The nearest surface point to `point` (world), lifted by the Offset, or None."""
+        if self.plane is not None:
+            co, normal = self.plane
+            side = 1.0 if (point - co).dot(normal) >= 0.0 else -1.0
+            return point - normal * (point - co).dot(normal) + normal * side * self.offset
         if self.tree is None:
             return None
         location, normal, _index, _distance = self.tree.find_nearest(self.inverse @ point)
         if location is None:
             return None
-        n = (self.inverse.to_3x3().transposed() @ normal).normalized()
-        return self.matrix @ location + n * self.offset
+        return self._lift(location, normal)[0]
 
     def along(self, point, direction):
         """Where the line through `point` (world) along `direction` meets the surface, the nearer of
         the two ways, lifted by the Offset; None where it doesn't."""
-        if self.tree is None or direction.length_squared < 1e-12:
+        if direction.length_squared < 1e-12:
+            return None
+        if self.plane is not None:
+            hit = self._plane_hit(point, direction)
+            if hit is None:
+                return None
+            return hit + self._plane_normal(hit - point if (hit - point).length_squared > 1e-12
+                                            else direction) * self.offset
+        if self.tree is None:
             return None
         o = self.inverse @ point
         d = (self.inverse.to_3x3() @ direction).normalized()
@@ -225,8 +296,7 @@ class Surface:
                 best = (location, normal, distance)
         if best is None:
             return None
-        n = (self.inverse.to_3x3().transposed() @ best[1]).normalized()
-        return self.matrix @ best[0] + n * self.offset
+        return self._lift(best[0], best[1])[0]
 
     def conform(self, point, normal, direction):
         """Where Conform puts a vertex at `point` with the world `normal`: the nearest surface point
@@ -234,6 +304,16 @@ class Surface:
         if direction == 'OBJECT':
             return self.along(point, normal)
         return self.nearest(point)
+
+    @property
+    def usable(self):
+        return self.tree is not None or self.plane is not None
+
+
+def can_draw(context, obj):
+    """Whether the Freeform tools have something to work on: the Surface object, or Draw On set to
+    the grid or the selection."""
+    return settings(context).draw_on != 'SURFACE' or target_of(obj) is not None
 
 
 def pixel_size(region, rv3d, mouse, point):
@@ -455,6 +535,8 @@ def build_topology(obj, strokes, cast):
 
 
 class MaximizeFreeformSettings(PropertyGroup):
+    draw_on: EnumProperty(name="Draw On", items=DRAW_ON, default='SURFACE',
+                          description="What the PolyDraw tools and the Conform brushes work on")
     min_distance: IntProperty(name="Min Distance", default=10, min=1, max=200, subtype='PIXEL',
                               description="Screen distance between the points of a drawn stroke")
     width: IntProperty(name="Width", default=24, min=2, max=1000, subtype='PIXEL',
@@ -759,7 +841,7 @@ class MAXIMIZE_OT_freeform_conform_brush(Operator):
     def poll(cls, context):
         obj = context.edit_object or context.active_object
         return obj is not None and obj.type == 'MESH' and obj.mode in {'EDIT', 'OBJECT'} and \
-            target_of(obj) is not None
+            can_draw(context, obj)
 
     def invoke(self, context, event):
         if context.region_data is None:
@@ -926,11 +1008,15 @@ class MAXIMIZE_OT_freeform_conform(Operator):
     @classmethod
     def poll(cls, context):
         obj = context.edit_object
-        return obj is not None and obj.type == 'MESH' and target_of(obj) is not None
+        return obj is not None and obj.type == 'MESH' and can_draw(context, obj)
 
     def execute(self, context):
         obj = context.edit_object
         surface = Surface(context, obj)
+        if not surface.usable:
+            self.report({'WARNING'}, "Select polygons to draw on" if settings(context).draw_on == 'SELECTION'
+                        else "Nothing to conform to")
+            return {'CANCELLED'}
         direction = settings(context).conform_direction
         bm = bmesh.from_edit_mesh(obj.data)
         bm.normal_update()
@@ -1023,6 +1109,7 @@ def draw(layout, context, obj, mod):
     if body:
         if context.mode != 'EDIT_MESH':
             body.label(text="Edit the mesh to draw on the surface", icon='INFO')
+        body.row(align=True).prop(s, "draw_on", expand=True)
         grid = ToolGrid(body)
         for tool, text in (('DRAG', "Drag"), ('STEP_BUILD', "Step Build"), ('EXTEND', "Extend"),
                            ('OPTIMIZE', "Optimize")):
