@@ -61,6 +61,29 @@ MAX_TERMS = {
     "Shrinkwrap": "Conform",
     "UV Project": "UVW Map (Blender)",
     "Unwrap": "Unwrap UVW",
+    # Modifiers whose Blender name is used nowhere else (Skin, Smooth, Armature and Wireframe need
+    # their own translation context first: the modifier list names them meanwhile).
+    "Screw": "Lathe",
+    "Decimate": "ProOptimizer",
+    "Cast": "Spherify",
+    "UV Warp": "UVW Xform",
+    "Normal Edit": "Edit Normals",
+    "Weighted Normal": "Weighted Normals",
+    "Surface Deform": "Skin Wrap",
+    "Mesh Cache": "Point Cache",
+    "Smooth Laplacian": "Relax",
+    "Data Transfer": "Attribute Transfer",
+    # Edit Poly and the viewport.
+    "Extrude Region": "Extrude",
+    "Extrude Individual Faces": "Extrude by Polygon",
+    "Subdivide": "Tessellate",
+    "Delete Loose": "Remove Isolated Vertices",
+    "Proportional Editing": "Soft Selection",
+    "Frame Selected": "Zoom Extents Selected",
+    "Frame All": "Zoom Extents",
+    "Hide Selected": "Hide Selection",
+    "Select Linked": "Select Element",
+    "Select Linked All": "Select Element",
 }
 
 _CONTEXTS = ("*", "Operator", "ID", "Modifier")
