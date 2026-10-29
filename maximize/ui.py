@@ -663,18 +663,25 @@ _MODIFIER_ROLLOUTS = (
 )
 
 
-class MAXIMIZE_PT_hierarchy(MaxPanel, Panel):
-    bl_label = "Hierarchy"
-    bl_options = {'DEFAULT_CLOSED'}
-
-    def draw(self, context):
-        col = self.layout.column(align=True)
-        col.operator("maximize.affect_pivot_only",
-                     depress=context.scene.tool_settings.use_transform_data_origin)
-        col.operator("maximize.center_pivot")
+def draw_utilities(layout, context):
+    """The Utilities tab: Align with the pivot tools, Array, Spacing Tool and Object Paint (Moritz's
+    Command Panel tab, or the sidebar's Max tab in Blender)."""
+    body = rollout(layout, "mx_util_align", "Align")
+    if body:
+        col = body.column(align=True)
+        col.operator("maximize.align", text="Align")
         col.operator("maximize.align_pivot_world")
-        col.separator()
-        col.operator("maximize.reset_xform")
+        col.operator("maximize.center_pivot")
+        col.operator("maximize.affect_pivot_only", depress=context.scene.tool_settings.use_transform_data_origin)
+    body = rollout(layout, "mx_util_objects", "Array and Spacing")
+    if body:
+        row = body.row(align=True)
+        row.operator("maximize.array", text="Array")
+        row.operator("maximize.spacing", text="Spacing Tool")
+    body = rollout(layout, "mx_util_object_paint", "Object Paint", closed=True)
+    if body:
+        from .object_paint import draw as draw_object_paint
+        draw_object_paint(body, context)
 
 
 class MAXIMIZE_PT_utilities(MaxPanel, Panel):
@@ -682,14 +689,14 @@ class MAXIMIZE_PT_utilities(MaxPanel, Panel):
     bl_options = {'DEFAULT_CLOSED'}
 
     def draw(self, context):
+        draw_utilities(self.layout, context)
+        # In Blender the Max tab also gathers what Moritz has elsewhere (quad menu, F12, keys).
         col = self.layout.column(align=True)
-        col.operator("maximize.transform_typein", text="Transform Type-In")
-        col.operator("maximize.align", text="Align")
-        col.operator("maximize.array", text="Array")
-        col.operator("maximize.spacing", text="Spacing Tool")
-        col.operator("maximize.clone", text="Clone")
-        col.operator("maximize.uvw_map", text="UVW Map")
         col.separator()
+        col.operator("maximize.transform_typein", text="Transform Type-In")
+        col.operator("maximize.clone", text="Clone")
+        col.operator("maximize.reset_xform")
+        col.operator("maximize.uvw_map", text="UVW Map")
         col.operator("maximize.select_by_name", text="Select by Name")
 
 
@@ -731,7 +738,6 @@ classes = (
     MAXIMIZE_OT_create_in_viewport,
     MAXIMIZE_PT_create,
     MAXIMIZE_PT_modify,
-    MAXIMIZE_PT_hierarchy,
     MAXIMIZE_PT_utilities,
     MAXIMIZE_PT_selection_sets,
     MAXIMIZE_PT_keymap,

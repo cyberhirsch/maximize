@@ -408,17 +408,6 @@ def draw(layout, context):
     col.prop(s, "seed")
 
 
-class MAXIMIZE_PT_object_paint(bpy.types.Panel):
-    bl_space_type = 'VIEW_3D'
-    bl_region_type = 'UI'
-    bl_category = "Max"
-    bl_label = "Object Paint"
-    bl_options = {'DEFAULT_CLOSED'}
-
-    def draw(self, context):
-        draw(self.layout, context)
-
-
 classes = (
     MaximizePaintObject,
     MaximizeObjectPaintSettings,
@@ -426,7 +415,6 @@ classes = (
     MAXIMIZE_OT_object_paint_fill,
     MAXIMIZE_OT_object_paint_pick,
     MAXIMIZE_OT_object_paint_remove,
-    MAXIMIZE_PT_object_paint,
 )
 
 
