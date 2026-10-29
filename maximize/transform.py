@@ -35,6 +35,81 @@ def _selected_verts(context):
     return obj, bm, [v for v in bm.verts if v.select]
 
 
+def read_absolute(context, mode):
+    """The Absolute values of Transform Type-In for `mode` ('MOVE' / 'ROTATE' / 'SCALE'): the
+    active object's position, rotation (degrees) or scale (percent), or in Edit Mode the selection's
+    middle."""
+    if context.mode == 'EDIT_MESH':
+        obj, _bm, verts = _selected_verts(context)
+        if mode == 'MOVE' and verts:
+            center = sum((v.co for v in verts), Vector()) / len(verts)
+            return tuple(obj.matrix_world @ center)
+        return (0.0, 0.0, 0.0) if mode != 'SCALE' else (100.0, 100.0, 100.0)
+    mat = context.active_object.matrix_world
+    if mode == 'MOVE':
+        return tuple(mat.translation)
+    if mode == 'ROTATE':
+        return tuple(math.degrees(a) for a in mat.to_euler())
+    return tuple(s * 100.0 for s in mat.to_scale())
+
+
+def apply_typein(context, mode, absolute=None, start=None, offset=None):
+    """Transform the selection: to `absolute` (from `start`, the values it had), or by `offset`
+    (degrees for Rotate, percent for Scale)."""
+    if context.mode == 'EDIT_MESH':
+        return _apply_edit(context, mode, absolute, start, offset)
+    objects = context.selected_objects or [context.active_object]
+    if mode == 'MOVE':
+        delta = Vector(offset) if offset is not None else Vector(absolute) - Vector(start)
+        for obj in objects:
+            obj.matrix_world.translation += delta
+    elif mode == 'ROTATE':
+        if offset is not None:
+            rot = Euler([math.radians(a) for a in offset]).to_matrix().to_4x4()
+            for obj in objects:
+                loc = obj.matrix_world.translation.copy()
+                obj.matrix_world = Matrix.Translation(loc) @ rot @ Matrix.Translation(-loc) @ obj.matrix_world
+        else:
+            for obj in objects:
+                loc, _rot, scale = obj.matrix_world.decompose()
+                rot = Euler([math.radians(a) for a in absolute]).to_quaternion()
+                obj.matrix_world = Matrix.LocRotScale(loc, rot, scale)
+    else:
+        for obj in objects:
+            loc, rot, scale = obj.matrix_world.decompose()
+            if offset is not None:
+                scale = Vector(s * f / 100.0 for s, f in zip(scale, offset))
+            else:
+                scale = Vector(f / 100.0 for f in absolute)
+            obj.matrix_world = Matrix.LocRotScale(loc, rot, scale)
+    return {'FINISHED'}
+
+
+def _apply_edit(context, mode, absolute, start, offset):
+    obj, _bm, verts = _selected_verts(context)
+    if not verts:
+        return {'CANCELLED'}
+    world = obj.matrix_world
+    to_local = world.inverted()
+    center = world @ (sum((v.co for v in verts), Vector()) / len(verts))
+    if mode == 'MOVE':
+        delta = Vector(offset) if offset is not None else Vector(absolute) - Vector(start)
+        mat = Matrix.Translation(delta)
+    elif offset is None:
+        # Edit Mode has no absolute rotation or scale.
+        return {'CANCELLED'}
+    elif mode == 'ROTATE':
+        rot = Euler([math.radians(a) for a in offset]).to_matrix().to_4x4()
+        mat = Matrix.Translation(center) @ rot @ Matrix.Translation(-center)
+    else:
+        scale = Matrix.Diagonal([f / 100.0 for f in offset] + [1.0])
+        mat = Matrix.Translation(center) @ scale @ Matrix.Translation(-center)
+    for v in verts:
+        v.co = to_local @ (mat @ (world @ v.co))
+    bmesh.update_edit_mesh(obj.data)
+    return {'FINISHED'}
+
+
 class MAXIMIZE_OT_transform_typein(Operator):
     """Type exact values for Move, Rotate or Scale, absolute or as an offset (F12)"""
     bl_idname = "maximize.transform_typein"
@@ -58,18 +133,7 @@ class MAXIMIZE_OT_transform_typein(Operator):
         return {'MOVE': "", 'ROTATE': "°", 'SCALE': "%"}[self.mode]
 
     def _read_absolute(self, context):
-        if context.mode == 'EDIT_MESH':
-            obj, _bm, verts = _selected_verts(context)
-            if self.mode == 'MOVE' and verts:
-                center = sum((v.co for v in verts), Vector()) / len(verts)
-                return tuple(obj.matrix_world @ center)
-            return (0.0, 0.0, 0.0) if self.mode != 'SCALE' else (100.0, 100.0, 100.0)
-        mat = context.active_object.matrix_world
-        if self.mode == 'MOVE':
-            return tuple(mat.translation)
-        if self.mode == 'ROTATE':
-            return tuple(math.degrees(a) for a in mat.to_euler())
-        return tuple(s * 100.0 for s in mat.to_scale())
+        return read_absolute(context, self.mode)
 
     def invoke(self, context, _event):
         self.mode = _active_tool_mode(context)
@@ -109,58 +173,9 @@ class MAXIMIZE_OT_transform_typein(Operator):
 
     def execute(self, context):
         start = getattr(self, "_start", None) or self._read_absolute(context)
-        use_offset = not self._offset_is_identity()
-        if context.mode == 'EDIT_MESH':
-            return self._execute_edit(context, start, use_offset)
-        return self._execute_object(context, start, use_offset)
-
-    def _execute_object(self, context, start, use_offset):
-        objects = context.selected_objects or [context.active_object]
-        if self.mode == 'MOVE':
-            delta = Vector(self.offset) if use_offset else Vector(self.absolute) - Vector(start)
-            for obj in objects:
-                obj.matrix_world.translation += delta
-        elif self.mode == 'ROTATE':
-            if use_offset:
-                rot = Euler([math.radians(a) for a in self.offset]).to_matrix().to_4x4()
-                for obj in objects:
-                    loc = obj.matrix_world.translation.copy()
-                    obj.matrix_world = Matrix.Translation(loc) @ rot @ Matrix.Translation(-loc) @ obj.matrix_world
-            else:
-                for obj in objects:
-                    loc, _rot, scale = obj.matrix_world.decompose()
-                    rot = Euler([math.radians(a) for a in self.absolute]).to_quaternion()
-                    obj.matrix_world = Matrix.LocRotScale(loc, rot, scale)
-        else:
-            for obj in objects:
-                loc, rot, scale = obj.matrix_world.decompose()
-                if use_offset:
-                    scale = Vector(s * f / 100.0 for s, f in zip(scale, self.offset))
-                else:
-                    scale = Vector(f / 100.0 for f in self.absolute)
-                obj.matrix_world = Matrix.LocRotScale(loc, rot, scale)
-        return {'FINISHED'}
-
-    def _execute_edit(self, context, start, use_offset):
-        obj, bm, verts = _selected_verts(context)
-        if not verts:
-            return {'CANCELLED'}
-        world = obj.matrix_world
-        to_local = world.inverted()
-        center = world @ (sum((v.co for v in verts), Vector()) / len(verts))
-        if self.mode == 'MOVE':
-            delta = Vector(self.offset) if use_offset else Vector(self.absolute) - Vector(start)
-            mat = Matrix.Translation(delta)
-        elif self.mode == 'ROTATE':
-            rot = Euler([math.radians(a) for a in self.offset]).to_matrix().to_4x4()
-            mat = Matrix.Translation(center) @ rot @ Matrix.Translation(-center)
-        else:
-            scale = Matrix.Diagonal([f / 100.0 for f in self.offset] + [1.0])
-            mat = Matrix.Translation(center) @ scale @ Matrix.Translation(-center)
-        for v in verts:
-            v.co = to_local @ (mat @ (world @ v.co))
-        bmesh.update_edit_mesh(obj.data)
-        return {'FINISHED'}
+        if not self._offset_is_identity():
+            return apply_typein(context, self.mode, offset=tuple(self.offset))
+        return apply_typein(context, self.mode, absolute=tuple(self.absolute), start=start)
 
 
 # ------------------------------------------------------------------------------
