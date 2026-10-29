@@ -27,3 +27,14 @@ for name in ("Max", "Moritz"):
           "| children", bool(find("Object Mode", "object.select_grouped", 'DOUBLE_CLICK')))
 import maximize.preferences as p
 print("MXKM enum", [k[0] for k in p.KEYMAPS])
+
+# The middle mouse pans with a transform tool active: no tool keymap takes it (Industry
+# Compatible's Maya-style copies of the tools' left-drag are dropped).
+for name in ("Moritz", "Max"):
+    bpy.ops.preferences.keyconfig_activate(filepath=bpy.utils.preset_find(name, "keyconfig"))
+    kc = bpy.context.window_manager.keyconfigs.active
+    taken = [(km.name, it.idname) for km in kc.keymaps if km.name.startswith("3D View Tool:")
+             for it in km.keymap_items
+             if it.type == 'MIDDLEMOUSE' and not (it.ctrl or it.shift or it.alt or it.oskey)]
+    assert not taken, (name, taken[:5])
+    print("MXKM", name, "middle mouse free in tool keymaps")
