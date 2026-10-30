@@ -226,13 +226,16 @@ def _apply_layout():
     units = scene.unit_settings
     units.system = 'METRIC'
     units.length_unit = 'CENTIMETERS'
+    # Moritz has the Command Panel and no Max sidebar tab.
+    moritz = hasattr(bpy.types, "PROPERTIES_PT_create")
 
     for window in bpy.context.window_manager.windows:
         for area in window.screen.areas:
             if area.type != 'VIEW_3D':
                 continue
             space = area.spaces.active
-            space.show_region_ui = True
+            if not moritz:
+                space.show_region_ui = True
             from .cameras import apply_viewport_defaults
             apply_viewport_defaults(space)
             region = next((r for r in area.regions if r.type == 'WINDOW'), None)
@@ -244,7 +247,8 @@ def _apply_layout():
                     bpy.ops.screen.region_quadview()
     scene["maximize_layout"] = True
     # The sidebar tabs only exist once the sidebar has been drawn.
-    bpy.app.timers.register(_select_max_tab, first_interval=0.5)
+    if not moritz:
+        bpy.app.timers.register(_select_max_tab, first_interval=0.5)
     return None
 
 

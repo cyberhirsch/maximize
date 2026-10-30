@@ -39,7 +39,7 @@ labels = {e[1]: e for e in mlist.entries(cube)}
 check("Simple Deform" in labels and "Bend" not in labels, "Blender scheme: Blender's names")
 check("bend" in labels["Simple Deform"][2].lower() + labels["Simple Deform"][3], "Simple Deform finds bend")
 check("Shell" in labels["Solidify"][2], "Solidify lists Shell")
-check("UVW Map" in labels and "Freeform (Max)" in labels, "Add-on entries in the list")
+check("UVW Map" in labels and "Freeform" in labels and not any("(Max)" in l for l in labels), "Add-on entries in the list")
 
 vocabulary.set_scheme('MAX')
 labels = {e[1]: e for e in mlist.entries(cube)}

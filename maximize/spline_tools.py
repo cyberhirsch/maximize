@@ -1725,7 +1725,8 @@ class MAXIMIZE_MT_spline_vertex_type(bpy.types.Menu):
 
 
 class MAXIMIZE_MT_spline_tools(bpy.types.Menu):
-    bl_label = "Max Spline Tools"
+    # "Max" tells it apart in stock Blender; Moritz has no add-on names (it is built in there).
+    bl_label = "Spline Tools" if hasattr(bpy.types, "PROPERTIES_PT_create") else "Max Spline Tools"
     bl_idname = "MAXIMIZE_MT_spline_tools"
 
     def draw(self, context):

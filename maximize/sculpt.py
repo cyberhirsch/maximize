@@ -284,7 +284,7 @@ def register():
         bpy.utils.register_class(cls)
     from .vocabulary import modifier_list
     if modifier_list() is not None:
-        modifier_list().register_entry("Sculpt (Max)", "maximize.sculpt_add", "multires sculpt brushes dyntopo")
+        modifier_list().register_entry("Sculpt", "maximize.sculpt_add", "multires sculpt brushes dyntopo")
     for name in _MENUS:
         menu = getattr(bpy.types, name, None)
         if menu is not None:

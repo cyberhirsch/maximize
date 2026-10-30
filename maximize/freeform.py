@@ -1249,7 +1249,7 @@ def register():
     bpy.types.Scene.maximize_freeform = PointerProperty(type=MaximizeFreeformSettings)
     from .vocabulary import modifier_list
     if modifier_list() is not None:
-        modifier_list().register_entry("Freeform (Max)", "maximize.freeform_add", "retopology polydraw draw topology conform")
+        modifier_list().register_entry("Freeform", "maximize.freeform_add", "retopology polydraw draw topology conform")
     for name in _MENUS:
         menu = getattr(bpy.types, name, None)
         if menu is not None:

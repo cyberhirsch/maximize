@@ -55,4 +55,32 @@ if moritz:
 else:
     check(bool(in_object), "Blender: the Max tab stays " + str(in_object))
 
+
+# The header Max menu: stock Blender only. In Moritz its entries are in Blender's own menus.
+from maximize import ui  # noqa: E402
+header = [f.__name__ for f in bpy.types.VIEW3D_MT_editor_menus._dyn_ui_initialize()]
+if moritz:
+    check("_header_menu" not in header, "Moritz: no Max menu in the header")
+    for menu, entries in ui._MORITZ_ENTRIES.items():
+        check(menu in ui._moritz_draws, "Moritz: entries in " + menu)
+    for menu in ui._MORITZ_ALIASES:
+        check(menu in ui._moritz_draws, "Moritz: aliases in " + menu)
+    ops = {e for entries in ui._MORITZ_ENTRIES.values() for e in entries if isinstance(e, str)}
+    menu_ops = {"maximize.uvw_map"}  # Add Modifier
+    for name in ("MAXIMIZE_MT_modify", "MAXIMIZE_MT_edit_poly", "MAXIMIZE_MT_hierarchy",
+                 "MAXIMIZE_MT_tools", "MAXIMIZE_MT_views"):
+        import inspect
+        src = inspect.getsource(getattr(ui, name))
+        import re
+        for op in re.findall(r'operator\("(maximize\.[a-z_]+)"', src):
+            check(op in ops or op in menu_ops, "Moritz: " + op + " has a place")
+    labels = {e[1] for e in __import__("bl_operators.moritz_modifier_list", fromlist=["x"]).entries(
+        bpy.context.active_object)}
+    check(not any("Max" in label.split() or "(Max)" in label for label in labels),
+          "Moritz: no Max-named entries in Add Modifier")
+    check(bpy.types.MAXIMIZE_MT_spline_tools.bl_label == "Spline Tools", "Moritz: Spline Tools")
+else:
+    check("_header_menu" in header, "Blender: the Max menu stays in the header")
+    check(not ui._moritz_draws, "Blender: nothing added to its menus")
+
 print("FAILURES", len(failures), failures)

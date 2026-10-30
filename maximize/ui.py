@@ -2,7 +2,8 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
-"""The Max menu in the 3D Viewport header and the Max command panel in the sidebar."""
+"""The Max menu in the 3D Viewport header and the Max command panel in the sidebar (stock Blender);
+in Moritz, the Command Panel's tabs and the Max menu's entries in Blender's own menus."""
 
 import os
 
@@ -138,6 +139,81 @@ class MAXIMIZE_MT_main(Menu):
 def _header_menu(self, context):
     if context.area.type == 'VIEW_3D':
         self.layout.menu("MAXIMIZE_MT_main")
+
+
+# ------------------------------------------------------------------------------
+# Moritz has no Max menu: nothing there reads as an add-on (Seb's rule). The Max menu's entries
+# sit in Blender's own menus instead; Create and Shapes are in Add, the modifiers in Add Modifier,
+# the keymap switch in Preferences.
+
+# Menu -> entries: an operator, or ("menu", idname).
+_MORITZ_ENTRIES = {
+    "VIEW3D_MT_edit_mesh_vertices": ("maximize.chamfer", "maximize.connect"),
+    "VIEW3D_MT_edit_mesh_edges": ("maximize.chamfer", "maximize.connect"),
+    "VIEW3D_MT_edit_mesh_delete": ("maximize.delete_subobject",),
+    "VIEW3D_MT_transform_object": ("maximize.transform_typein", "maximize.affect_pivot_only",
+                                   "maximize.center_pivot", "maximize.align_pivot_world"),
+    "VIEW3D_MT_object_apply": ("maximize.reset_xform",),
+    "VIEW3D_MT_object": ("maximize.align", "maximize.array", "maximize.spacing", "maximize.clone"),
+    "VIEW3D_MT_select_object": ("maximize.select_by_name", ("menu", "MAXIMIZE_MT_selection_sets")),
+    "VIEW3D_MT_select_edit_mesh": (("menu", "MAXIMIZE_MT_selection_sets"),),
+    "VIEW3D_MT_view": ("maximize.viewport_maximize", "maximize.camera_from_view"),
+    "TOPBAR_MT_render": ("maximize.render_setup", "maximize.material_editor"),
+}
+
+# The Max-named aliases the name scheme doesn't already give (Weld, Attach and the like are
+# Blender's own entries renamed), in the menu of the operator they call. Only with Max names.
+_MORITZ_ALIASES = {
+    "VIEW3D_MT_edit_mesh_merge": ("target_weld", "collapse_sub"),
+    "VIEW3D_MT_edit_mesh_vertices": ("break_vertex", "create_poly"),
+    "VIEW3D_MT_edit_mesh_edges": ("paint_connect", "build_corner", "split", "turn", "hard", "smooth_edges"),
+    "VIEW3D_MT_edit_mesh_faces": ("bevel_poly", "make_planar", "quadrify", "meshsmooth"),
+    "VIEW3D_MT_select_edit_mesh": ("select_by_angle", "grow", "shrink", "loop", "ring", "similar",
+                                   "select_outline", "select_fill", "select_nonquads", "select_open",
+                                   "select_random", "select_mirror"),
+}
+_ALIAS_LABELS = {alias[0]: alias[1] for alias in ALIASES}
+
+
+def _moritz_menu_draw(menu):
+    entries = _MORITZ_ENTRIES.get(menu, ())
+    aliases = _MORITZ_ALIASES.get(menu, ())
+
+    def draw(self, context):
+        layout = self.layout
+        if entries:
+            layout.separator()
+            for entry in entries:
+                if isinstance(entry, tuple):
+                    layout.menu(entry[1])
+                elif entry == "maximize.affect_pivot_only":
+                    layout.operator(entry, depress=context.scene.tool_settings.use_transform_data_origin)
+                else:
+                    layout.operator(entry)
+        if aliases and vocabulary.name_scheme(context) != 'BLENDER':
+            layout.separator()
+            for ident in aliases:
+                layout.operator("maximize." + ident, text=_ALIAS_LABELS[ident], translate=False)
+    return draw
+
+
+_moritz_draws = {}
+
+
+def _register_moritz_menus():
+    for menu in sorted(set(_MORITZ_ENTRIES) | set(_MORITZ_ALIASES)):
+        menu_type = getattr(bpy.types, menu, None)
+        if menu_type is not None:
+            _moritz_draws[menu] = _moritz_menu_draw(menu)
+            menu_type.append(_moritz_draws[menu])
+
+
+def _unregister_moritz_menus():
+    for menu, draw in _moritz_draws.items():
+        menu_type = getattr(bpy.types, menu, None)
+        if menu_type is not None:
+            menu_type.remove(draw)
+    _moritz_draws.clear()
 
 
 # ------------------------------------------------------------------------------
@@ -836,7 +912,10 @@ def register():
     mlist = vocabulary.modifier_list()
     if mlist is not None:
         mlist.register_entry("UVW Map", "maximize.uvw_map", "uv mapping planar box cylindrical spherical gizmo")
-    bpy.types.VIEW3D_MT_editor_menus.append(_header_menu)
+    if has_command_panel():
+        _register_moritz_menus()
+    else:
+        bpy.types.VIEW3D_MT_editor_menus.append(_header_menu)
     # Moritz only: Blender's header has no hook.
     if hasattr(bpy.types.VIEW3D_HT_header, "select_mode_draw"):
         bpy.types.VIEW3D_HT_header.select_mode_draw = draw_levels
@@ -872,6 +951,7 @@ def unregister():
     del bpy.types.Scene.maximize_autogrid
     if getattr(bpy.types.VIEW3D_HT_header, "select_mode_draw", None) is draw_levels:
         bpy.types.VIEW3D_HT_header.select_mode_draw = None
+    _unregister_moritz_menus()
     bpy.types.VIEW3D_MT_editor_menus.remove(_header_menu)
     if hasattr(bpy.types, "OBJECT_MT_modifier_add_flat"):
         bpy.types.OBJECT_MT_modifier_add_flat.remove(_draw_add_menu)

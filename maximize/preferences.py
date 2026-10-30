@@ -73,9 +73,13 @@ class MaximizePreferences(bpy.types.AddonPreferences):
         default='AUTO',
         update=_update_names,
     )
+    # Moritz: no add-on names, and no Max sidebar tab.
     use_startup_layout: BoolProperty(
-        name="Max Layout for New Files",
-        description="New files open with a quad view, centimeters and the Max sidebar tab",
+        name=("Quad View Layout for New Files" if hasattr(bpy.types, "PROPERTIES_PT_create")
+              else "Max Layout for New Files"),
+        description=("New files open with a quad view and centimeters"
+                     if hasattr(bpy.types, "PROPERTIES_PT_create")
+                     else "New files open with a quad view, centimeters and the Max sidebar tab"),
         default=True,
     )
     use_hover_highlight: BoolProperty(
