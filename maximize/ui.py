@@ -482,21 +482,55 @@ _POLY_LEVEL_TOOLS = {
 _WIDE_TOOLS = {"hinge_from_edge", "extrude_along_spline"}
 
 
+def draw_soft_selection(layout, context):
+    """Max's Soft Selection rollout: Blender's proportional editing, in Max's words."""
+    ts = context.scene.tool_settings
+    layout.prop(ts, "use_proportional_edit", text="Use Soft Selection")
+    col = layout.column()
+    col.active = ts.use_proportional_edit
+    col.prop(ts, "use_proportional_connected", text="Edge Distance")
+    col.prop(ts, "use_proportional_projected", text="Projected (2D)")
+    col.prop(ts, "proportional_size", text="Falloff")
+    col.prop(ts, "proportional_edit_falloff", text="Curve")
+
+
 def draw_poly_rollouts(layout, context, key):
-    """Edit Poly's rollouts (also Editable Poly's, at the base): Selection, and in Edit Mode Edit
-    Geometry, the level's Edit rollout and Material IDs. `key` keeps their open state apart."""
+    """Edit Poly's rollouts, also Editable Poly's at the base (one code for both, as in Max):
+    Selection, Soft Selection, Edit Geometry, and in Edit Mode the level's Edit rollout, Loops,
+    Material IDs and Smoothing Groups. `key` keeps their open state apart."""
     body = rollout(layout, key + "_selection", "Selection")
     if body:
         draw_poly_selection(body, context)
+    body = rollout(layout, key + "_soft_selection", "Soft Selection", closed=True)
+    if body:
+        draw_soft_selection(body, context)
+    body = rollout(layout, key + "_geometry", "Edit Geometry")
+    if body:
+        if context.mode == 'EDIT_MESH':
+            draw_poly_geometry(body, context)
+        else:
+            # Max's object level: Attach works on whole objects; the sub-object tools wait for a
+            # level (1-5), greyed out as in Max.
+            body.operator("maximize.attach", icon=tool_icon("attach"))
+            col = body.column()
+            col.enabled = False
+            grid = ToolGrid(col)
+            grid.operator("mesh.extrude_context_move", text="Extrude")
+            for op in ("chamfer", "inset", "connect", "cut", "swift_loop", "weld", "bridge", "cap",
+                       "remove", "detach", "quickslice", "relax"):
+                grid.operator("maximize." + op, icon=tool_icon(op))
+            grid.pad()
+    if context.mode == 'EDIT_MESH':
+        _draw_poly_level_rollouts(layout, context, key)
+    # Last, as in Max.
     body = rollout(layout, key + "_paint_deform", "Paint Deform", closed=True)
     if body:
         from .paint_deform import draw as draw_paint_deform
         draw_paint_deform(body, context)
-    if context.mode != 'EDIT_MESH':
-        return
-    body = rollout(layout, key + "_geometry", "Edit Geometry")
-    if body:
-        draw_poly_geometry(body, context)
+
+
+def _draw_poly_level_rollouts(layout, context, key):
+    """Edit Mode: the level's Edit rollout, Loops, Material IDs and Smoothing Groups."""
     from .selection import current_level
     level = current_level(context)
     if level not in _POLY_LEVEL_TOOLS:
