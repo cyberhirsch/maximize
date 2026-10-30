@@ -98,6 +98,8 @@ class MaximizePreferences(bpy.types.AddonPreferences):
         ),
     )
     first_run_done: BoolProperty(default=False, options={'HIDDEN'})
+    # Moritz: preferences saved before the Moritz keymap became the default move to it once.
+    moritz_keymap_done: BoolProperty(default=False, options={'HIDDEN'})
     # Max's Show Cage colors (Edit Poly > Edit Geometry).
     cage_color: FloatVectorProperty(
         name="Cage", subtype='COLOR', size=3, min=0.0, max=1.0, default=(1.0, 0.55, 0.1),
@@ -126,18 +128,29 @@ class MaximizePreferences(bpy.types.AddonPreferences):
         row.prop(self, "cage_selected_color")
 
 
+def _activate_moritz():
+    from .keymaps import activate
+    if activate("Moritz"):
+        bpy.context.preferences.is_dirty = True
+    return None
+
+
 def first_run_setup():
     """Max navigation defaults and the Moritz keymap, applied once when the add-on is first enabled."""
     prefs = get_prefs()
-    if prefs is None or prefs.first_run_done:
+    if prefs is None:
         return
-    inputs = bpy.context.preferences.inputs
-    inputs.use_rotate_around_active = True
-    inputs.use_zoom_to_mouse = True
-    prefs.first_run_done = True
-    # Start in the Moritz keymap; Preferences > Keymap switches back.
-    from .keymaps import activate
-    bpy.app.timers.register(lambda: activate("Moritz") and None, first_interval=0.0)
+    from .keymaps import _built_in
+    if not prefs.first_run_done:
+        inputs = bpy.context.preferences.inputs
+        inputs.use_rotate_around_active = True
+        inputs.use_zoom_to_mouse = True
+        prefs.first_run_done = True
+    elif prefs.moritz_keymap_done or not _built_in():
+        return
+    prefs.moritz_keymap_done = True
+    # Start in the Moritz keymap; Preferences > Keymap switches back, and that choice then stays.
+    bpy.app.timers.register(_activate_moritz, first_interval=0.0)
 
 
 classes = (
