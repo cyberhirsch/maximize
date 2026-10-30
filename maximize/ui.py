@@ -590,9 +590,14 @@ def draw_modify(layout, context):
 
 
 class MaxPanel:
+    """The sidebar's Max tab: stock Blender only, Moritz has the Command Panel instead."""
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = "Max"
+
+    @classmethod
+    def poll(cls, _context):
+        return not has_command_panel()
 
 
 class MAXIMIZE_PT_create(MaxPanel, Panel):

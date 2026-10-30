@@ -256,6 +256,9 @@ class MAXIMIZE_PT_smoothing(Panel):
 
     @classmethod
     def poll(cls, context):
+        # Moritz has no Max sidebar tab: this is in the Command Panel there.
+        if hasattr(bpy.types, "PROPERTIES_PT_create"):
+            return False
         return context.mode == 'EDIT_MESH' and context.tool_settings.mesh_select_mode[2]
 
     def draw(self, context):

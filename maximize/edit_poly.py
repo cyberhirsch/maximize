@@ -486,6 +486,9 @@ class MAXIMIZE_PT_edit_poly(Panel):
 
     @classmethod
     def poll(cls, context):
+        # Moritz has no Max sidebar tab: this is in the Command Panel there.
+        if hasattr(bpy.types, "PROPERTIES_PT_create"):
+            return False
         obj = context.active_object
         return obj is not None and obj.type == 'MESH'
 
