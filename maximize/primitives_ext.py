@@ -14,6 +14,7 @@ import math
 
 from . import quad_caps as qc
 from . import teapot_data
+from .mx_icons import mx_icon
 
 DIST = 'NodeSocketFloat'
 INT = 'NodeSocketInt'
@@ -24,7 +25,8 @@ FLOAT = 'NodeSocketFloat'
 STANDARD_KINDS = (
     ('GEOSPHERE', "GeoSphere", "", 'MESH_ICOSPHERE', 7),
     ('PYRAMID', "Pyramid", "", 'MESH_CONE', 8),
-    ('TEAPOT', "Teapot", "", 'MESH_MONKEY', 9),
+    # Moritz's teapot icon where the build has it (the monkey is Suzanne's).
+    ('TEAPOT', "Teapot", "", mx_icon('MX_CR_TEAPOT', 'MESH_MONKEY'), 9),
 )
 EXTENDED_KINDS = (
     ('HEDRA', "Hedra", "", 'MESH_ICOSPHERE', 40),

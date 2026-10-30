@@ -296,7 +296,11 @@ def draw_object_types(layout, context, category):
 
     if category == 'GEOMETRY':
         grid = group()
-        _kind_buttons(grid, primitives.STANDARD_PRIMITIVES)
+        for ident in primitives.STANDARD_PRIMITIVES:
+            _kind_buttons(grid, (ident,))
+            if ident == 'TEAPOT':
+                # Blender's monkey beside Max's teapot (Seb).
+                _create_button(grid, "maximize.add_suzanne", "Suzanne", 'MESH_MONKEY')
         _create_button(grid, "maximize.add_text", "TextPlus", 'OUTLINER_OB_FONT', plus=True)
         col.separator(factor=0.5)
         _kind_buttons(group(), primitives.EXTENDED_PRIMITIVES)

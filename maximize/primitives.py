@@ -675,6 +675,109 @@ class MAXIMIZE_OT_add_blobmesh(_ClickCreate, Operator):
         return super().invoke(context, event)
 
 
+def _suzanne_mesh(name):
+    """Blender's monkey as a plain mesh, 2 units across (size 2, as `primitive_monkey_add`)."""
+    import bmesh
+    me = bpy.data.meshes.new(name)
+    bm = bmesh.new()
+    bmesh.ops.create_monkey(bm)
+    bm.to_mesh(me)
+    bm.free()
+    for poly in me.polygons:
+        poly.use_smooth = False
+    return me
+
+
+class MAXIMIZE_OT_add_suzanne(Operator):
+    """Create Suzanne, Blender's monkey: drag from the center in a viewport to size it. A plain
+    mesh (Editable Poly), not a parametric primitive"""
+    bl_idname = "maximize.add_suzanne"
+    bl_label = "Suzanne"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'OBJECT'
+
+    def _create(self, context, matrix):
+        name = _max_name("Suzanne")
+        obj = bpy.data.objects.new(name, _suzanne_mesh(name))
+        context.collection.objects.link(obj)
+        obj.matrix_world = matrix
+        for other in context.selected_objects:
+            other.select_set(False)
+        obj.select_set(True)
+        context.view_layer.objects.active = obj
+        return obj
+
+    def execute(self, context):
+        self._create(context, context.scene.cursor.matrix)
+        return {'FINISHED'}
+
+    def invoke(self, context, _event):
+        if context.area is None or context.area.type != 'VIEW_3D':
+            return self.execute(context)
+        self._obj = None
+        self._created = 0
+        context.window_manager.modal_handler_add(self)
+        context.window.cursor_modal_set('CROSSHAIR')
+        context.workspace.status_text_set("Create Suzanne: drag the size in a viewport (right-click or Esc to stop)")
+        return {'RUNNING_MODAL'}
+
+    def _end(self, context):
+        context.workspace.status_text_set(None)
+        context.window.cursor_modal_restore()
+        return {'FINISHED'} if self._created else {'CANCELLED'}
+
+    def _hit(self, event):
+        mouse = (event.mouse_x - self._region.x, event.mouse_y - self._region.y)
+        ray = view3d_utils.region_2d_to_origin_3d(self._region, self._region.data, mouse)
+        direction = view3d_utils.region_2d_to_vector_3d(self._region, self._region.data, mouse)
+        return intersect_line_plane(ray, ray + direction, self._origin, self._n)
+
+    def modal(self, context, event):
+        if event.type in {'RIGHTMOUSE', 'ESC'} and event.value == 'PRESS':
+            if self._obj is not None:
+                # Cancel the one being dragged, keep the ones made before.
+                bpy.data.objects.remove(self._obj)
+                self._obj = None
+            return self._end(context)
+        if event.type == 'MOUSEMOVE' and self._obj is not None:
+            hit = self._hit(event)
+            if hit is not None:
+                # Suzanne is 2 units across at scale 1: the drag is her half-width.
+                self._obj.scale = (max((hit - self._center).length, 1e-4),) * 3
+            return {'RUNNING_MODAL'}
+        if event.type != 'LEFTMOUSE':
+            return {'PASS_THROUGH'} if event.type != 'MOUSEMOVE' else {'RUNNING_MODAL'}
+        if event.value == 'PRESS':
+            self._region = MAXIMIZE_OT_add_primitive._region_at(self, context, event)
+            if self._region is None:
+                return self._end(context)
+            mouse = (event.mouse_x - self._region.x, event.mouse_y - self._region.y)
+            u, v, n = _grid_plane(self._region.data)
+            self._origin, self._n = Vector(), n
+            surface = autogrid_hit(context, self._region, mouse)
+            if surface is not None:
+                self._origin, u, v, self._n = surface
+            hit = self._hit(event)
+            if hit is None:
+                return {'RUNNING_MODAL'}
+            self._center = hit
+            # Upright on the grid: her face looks along -v (Blender's monkey faces -Y).
+            basis = Matrix((u, v, self._n)).transposed().to_4x4()
+            self._obj = self._create(context, Matrix.Translation(hit) @ basis)
+            self._obj.scale = (1e-4,) * 3
+        elif event.value == 'RELEASE' and self._obj is not None:
+            size = self._obj.scale[0] if self._obj.scale[0] > 1e-4 else 1.0  # a click: default size
+            # Into the mesh, so the object keeps scale 1 as Max's objects do.
+            self._obj.data.transform(Matrix.Scale(size, 4))
+            self._obj.scale = (1.0,) * 3
+            self._obj = None
+            self._created += 1
+        return {'RUNNING_MODAL'}
+
+
 def _entry_fields(kind):
     """(property, parameter name) pairs Keyboard Entry offers for a kind, from its creation steps."""
     fields = []
@@ -738,6 +841,8 @@ class MAXIMIZE_MT_create(bpy.types.Menu):
         for ident in STANDARD_PRIMITIVES + EXTENDED_PRIMITIVES:
             layout.operator("maximize.add_primitive", text=kind_label(ident),
                             icon=next(k[3] for k in KINDS if k[0] == ident)).kind = ident
+            if ident == 'TEAPOT':
+                layout.operator("maximize.add_suzanne", icon='MESH_MONKEY')
         layout.operator("maximize.add_blobmesh", icon='META_BALL')
         _draw_create_options(layout)
 
@@ -803,6 +908,7 @@ classes = (
     MAXIMIZE_OT_autogrid,
     MAXIMIZE_OT_add_text,
     MAXIMIZE_OT_add_blobmesh,
+    MAXIMIZE_OT_add_suzanne,
 ) + compound.classes
 
 
