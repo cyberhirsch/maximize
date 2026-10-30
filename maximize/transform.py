@@ -653,6 +653,27 @@ _pending_clone = None
 _MODAL_PREFIXES = ("TRANSFORM_OT_", "GIZMOGROUP_OT_")
 
 
+def gizmo_arrow_move(context):
+    """Shift+drag on a Move gizmo arrow: move along that arrow, as in Max. (Blender's gizmo turns
+    Shift+arrow into a move in the plane across it.) Returns True when the Move was started."""
+    group = getattr(context, "gizmo_group", None)
+    if group is None or group.bl_idname != "VIEW3D_GGT_xform_gizmo":
+        return False
+    arrow = next((g for g in group.gizmos if g.is_highlight and g.bl_idname == "GIZMO_GT_arrow_3d"), None)
+    if arrow is None:
+        return False
+    # The arrow points along Z of its offset, in the orientation of its basis.
+    direction = (arrow.matrix_basis @ arrow.matrix_offset).col[2].xyz
+    if direction.length < 1e-9:
+        return False
+    # An orientation whose Z is the arrow, the drag constrained to it.
+    orient = direction.normalized().to_track_quat('Z', 'Y').to_matrix()
+    bpy.ops.transform.translate('INVOKE_DEFAULT', orient_type='GLOBAL', orient_matrix=orient,
+                                orient_matrix_type='GLOBAL', constraint_axis=(False, False, True),
+                                release_confirm=True)
+    return True
+
+
 def _start_clone(context):
     """Duplicate the selection; the clones become the selection. Returns False on failure."""
     global _pending_clone
@@ -731,6 +752,8 @@ class MAXIMIZE_OT_clone_gizmo(Operator):
 
     def invoke(self, context, _event):
         _start_clone(context)
+        if gizmo_arrow_move(context):
+            return {'FINISHED'}
         # Pass the event on: the next keymap item starts the gizmo drag on the clones.
         return {'PASS_THROUGH'}
 

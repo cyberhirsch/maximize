@@ -1,8 +1,9 @@
 # Run: moritz.exe --factory-startup --enable-event-simulate --python tests/test_smart_extrude_drag.py
-# (MX_KEYMAP=Max for the Max keymap; Moritz by default; MX_GIZMO=1 drags the Move gizmo's arrow;
-# MX_NO_EDIT_STEP=1: the Move is the first undo step in Edit Mode.)
+# (MX_KEYMAP=Max for the Max keymap; Moritz by default; MX_GIZMO=ARROW drags the Move gizmo's arrow,
+# MX_GIZMO=RING its center ring; MX_NO_EDIT_STEP=1: the Move is the first undo step in Edit Mode.)
 # Shift+drag of polygons with the Move tool: Smart Extrude stays after the release (Seb: "when i
-# release it snaps back to the before state").
+# release it snaps back to the before state"), also from the gizmo's ring, and with an arrow it goes
+# along that arrow in the Transform Orientation (Global here, on a tilted cube), not the normal.
 import os
 import sys
 
@@ -17,7 +18,7 @@ from bpy_extras import view3d_utils  # noqa: E402
 from maximize.keymaps import activate  # noqa: E402
 
 KEYMAP = os.environ.get("MX_KEYMAP", "Moritz")
-GIZMO = os.environ.get("MX_GIZMO") == "1"
+GIZMO = {"1": "ARROW"}.get(os.environ.get("MX_GIZMO", ""), os.environ.get("MX_GIZMO", ""))
 failures = []
 
 
@@ -25,7 +26,7 @@ def say(*a): print("MXSE", " ".join(str(x) for x in a), flush=True)
 
 
 def check(name, ok, *info):
-    say("OK" if ok else "FAIL", KEYMAP + (" gizmo" if GIZMO else "") + ":", name, *info)
+    say("OK" if ok else "FAIL", KEYMAP + (" " + GIZMO.lower() if GIZMO else "") + ":", name, *info)
     if not ok:
         failures.append(name)
 
@@ -54,8 +55,16 @@ def s_setup():
 
 
 def s_edit():
+    from mathutils import Vector
     r = region()
+    obj = bpy.context.active_object
+    # Tilted, so no Global axis lies along a face normal.
+    obj.rotation_euler = (0.35, 0.0, 0.5)
+    bpy.context.view_layer.update()
+    bpy.context.scene.transform_orientation_slots[0].type = 'GLOBAL'
     with bpy.context.temp_override(window=win(), area=area(), region=r):
+        # A rotation by hand has its undo step; the one by script would be undone with the drag.
+        bpy.ops.ed.undo_push(message="Rotate")
         bpy.ops.object.mode_set(mode='EDIT')
         bpy.context.tool_settings.mesh_select_mode = (False, False, True)
         bpy.ops.mesh.select_all(action='DESELECT')
@@ -63,26 +72,30 @@ def s_edit():
         if os.environ.get("MX_NO_EDIT_STEP") != "1":
             # Tab makes an undo step on entering Edit Mode; the script call above does not.
             bpy.ops.ed.undo_push(message="Toggle Edit Mode")
-    obj = bpy.context.active_object
     bm = bmesh.from_edit_mesh(obj.data)
-    # The face toward the viewer.
     rv3d = r.data
-    from mathutils import Vector
     view = rv3d.view_rotation @ Vector((0, 0, 1))
     normal_world = obj.matrix_world.to_3x3()
-    face = max(bm.faces, key=lambda f: (normal_world @ f.normal).dot(view))
+    face = max(bm.faces, key=lambda f: (normal_world @ f.normal).normalized().dot(view))
     face.select = True
     bm.select_flush(True)
     bmesh.update_edit_mesh(obj.data)
     center = obj.matrix_world @ face.calc_center_median()
+    P['center'] = center
+    P['normal'] = (normal_world @ face.normal).normalized()
     c2 = view3d_utils.location_3d_to_region_2d(r, rv3d, center)
-    if GIZMO:
-        # Along the Move gizmo's arrow that shows longest on screen.
+    if GIZMO == 'ARROW':
+        # The Global arrow nearest the face normal (but off it), long enough on screen to grab.
         def screen_dir(axis):
-            d = view3d_utils.location_3d_to_region_2d(r, rv3d, center + axis * 0.1) - c2
-            return d
-        d = max((screen_dir(Vector(a)) for a in ((1, 0, 0), (0, 1, 0), (0, 0, 1))), key=lambda d: d.length)
-        co = c2 + d.normalized() * 55 * bpy.context.preferences.system.ui_scale
+            return view3d_utils.location_3d_to_region_2d(r, rv3d, center + axis * 0.5) - c2
+        axes = [Vector(a) for a in ((1, 0, 0), (0, 1, 0), (0, 0, 1))]
+        axis = max((a for a in axes if screen_dir(a).length > 0.4 * max(screen_dir(b).length for b in axes)),
+                   key=lambda a: abs(a.dot(P['normal'])))
+        P['axis'] = axis
+        co = c2 + screen_dir(axis).normalized() * 55 * bpy.context.preferences.system.ui_scale
+        say("arrow", tuple(axis), "normal . axis", round(abs(axis.dot(P['normal'])), 3))
+    elif GIZMO == 'RING':
+        co = c2
     else:
         # On the face, away from the gizmo's center ring.
         corner = view3d_utils.location_3d_to_region_2d(r, rv3d, obj.matrix_world @ face.verts[0].co)
@@ -104,7 +117,10 @@ def s_drag():
 
 def s_mid():
     say("during", counts(), [op.bl_idname for op in win().modal_operators])
-    ev('LEFTMOUSE', 'RELEASE', P['x'] + 42, P['y'] + 56, shift=True)
+    # More moves once the drag has started, as a real drag keeps moving.
+    for i in range(8, 13):
+        ev('MOUSEMOVE', 'NOTHING', P['x'] + i * 6, P['y'] + i * 8, shift=True)
+    ev('LEFTMOUSE', 'RELEASE', P['x'] + 72, P['y'] + 96, shift=True)
     ev('LEFT_SHIFT', 'RELEASE', P['x'] + 42, P['y'] + 56)
 
 
@@ -116,6 +132,14 @@ def s_check():
     after = counts()
     check("the extrusion stays after the release", after != P['before'] and after[1] > P['before'][1],
           P['before'], "->", after)
+    if 'axis' in P:
+        obj = bpy.context.active_object
+        bm = bmesh.from_edit_mesh(obj.data)
+        cap = [obj.matrix_world @ f.calc_center_median() for f in bm.faces if f.select]
+        moved = (sum(cap, P['center'] * 0) / max(len(cap), 1)) - P['center']
+        d = moved.normalized()
+        check("along the arrow, not the normal", len(cap) > 0 and abs(d.dot(P['axis'])) > 0.99,
+              "dir . axis", round(abs(d.dot(P['axis'])), 3), "dir . normal", round(abs(d.dot(P['normal'])), 3))
     with bpy.context.temp_override(window=win(), area=area(), region=region()):
         bpy.ops.ed.undo()
     check("one undo takes it away", counts() == P['before'], counts())

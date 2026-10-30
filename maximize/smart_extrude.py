@@ -73,8 +73,14 @@ def _plain_extrude(bm, faces, offset):
     bmesh.ops.delete(bm, geom=faces, context='FACES')
     for f in bm.faces:
         f.select = False
+    for e in bm.edges:
+        e.select = False
+    for v in bm.verts:
+        v.select = False
+    # As in Max, only the cap stays selected, not the new walls.
+    moved = set(verts)
     for e in result["geom"]:
-        if isinstance(e, bmesh.types.BMFace):
+        if isinstance(e, bmesh.types.BMFace) and all(v in moved for v in e.verts):
             e.select = True
     bm.select_flush(True)
 
@@ -430,6 +436,9 @@ class MAXIMIZE_OT_smart_extrude_drag(Operator):
         _pending_drag = (context.window, context.area, obj.name, before, moving.index, moving.co.copy(), 0)
         bpy.app.timers.register(_watch_drag, first_interval=0.05)
         if self.gizmo:
+            from .transform import gizmo_arrow_move
+            if gizmo_arrow_move(context):
+                return {'FINISHED'}
             # The next keymap item starts the gizmo's drag on the extrusion.
             return {'PASS_THROUGH'}
         bpy.ops.transform.translate('INVOKE_DEFAULT', release_confirm=True)
