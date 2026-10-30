@@ -344,39 +344,53 @@ def _watch_drag():
     global _pending_drag
     if _pending_drag is None:
         return None
-    window, area, obj, before, index, start, ticks = _pending_drag
+    window, area, name, before, index, start, ticks = _pending_drag
     try:
         running = any(op.bl_idname.startswith(("TRANSFORM_OT_", "GIZMOGROUP_OT_")) for op in window.modal_operators)
     except ReferenceError:
         _pending_drag = None
+        before.free()
         return None
     if running or ticks < 2:
-        _pending_drag = (window, area, obj, before, index, start, ticks + 1)
+        _pending_drag = (window, area, name, before, index, start, ticks + 1)
         return 0.05
     _pending_drag = None
-    try:
-        if obj.mode != 'EDIT':
-            raise ReferenceError
-        bm = bmesh.from_edit_mesh(obj.data)
-        bm.verts.ensure_lookup_table()
-        offset = bm.verts[index].co - start if index < len(bm.verts) else Vector()
-    except ReferenceError:
-        bpy.data.meshes.remove(before)
+    # By name, not by reference: the undo below can reload the data and drop Python references.
+    obj = bpy.data.objects.get(name)
+    if obj is None or obj.mode != 'EDIT':
+        before.free()
         return None
+    bm = bmesh.from_edit_mesh(obj.data)
+    bm.verts.ensure_lookup_table()
+    offset = bm.verts[index].co - start if index < len(bm.verts) else Vector()
     region = next((r for r in area.regions if r.type == 'WINDOW'), None)
     with bpy.context.temp_override(window=window, area=area, region=region):
         if offset.length > 1e-6:
             # The Move made an undo step with the preview in it: step back over it (to the mesh as it
             # was, the preview itself made none), so one undo takes the whole Smart Extrude away.
             bpy.ops.ed.undo()
+            obj = bpy.data.objects.get(name)
+            if obj is not None and obj.mode != 'EDIT':
+                # The Move was the first step in Edit Mode, so the undo left it: back to the Move,
+                # the mesh is put back from the copy below (two undo steps then, not one).
+                bpy.ops.ed.redo()
+                obj = bpy.data.objects.get(name)
+        if obj is None or obj.mode != 'EDIT':
+            before.free()
+            return None
         bm = bmesh.from_edit_mesh(obj.data)
-        if len(bm.verts) != len(before.vertices) or len(bm.faces) != len(before.polygons):
+        # Also when only the selection differs: a selection made by script has no undo step.
+        if (len(bm.verts) != len(before.verts) or len(bm.faces) != len(before.faces)
+                or [f.index for f in bm.faces if f.select] != [f.index for f in before.faces if f.select]):
+            mesh = bpy.data.meshes.new("Smart Extrude")
+            before.to_mesh(mesh)
             bm.clear()
-            bm.from_mesh(before)
+            bm.from_mesh(mesh)
+            bpy.data.meshes.remove(mesh)
             bmesh.update_edit_mesh(obj.data)
+        before.free()
         if offset.length > 1e-6:
             bpy.ops.maximize.smart_extrude('EXEC_DEFAULT', offset=offset)
-    bpy.data.meshes.remove(before)
     return None
 
 
@@ -405,15 +419,15 @@ class MAXIMIZE_OT_smart_extrude_drag(Operator):
         faces = _selected_faces(bm)
         if not faces:
             return {'CANCELLED'}
-        before = bpy.data.meshes.new("Smart Extrude")
-        bm.to_mesh(before)
+        # A detached copy, not a mesh data-block: the undo in _watch_drag can reload the data.
+        before = bm.copy()
         # A plain extrusion for the Move to drag (the gizmo's axis, X / Y / Z, snapping); when the
         # Move ends, the mesh goes back and Smart Extrude runs with the move.
         _plain_extrude(bm, faces, Vector())
         bm.verts.index_update()
         moving = next(v for f in bm.faces if f.select for v in f.verts)
         bmesh.update_edit_mesh(obj.data)
-        _pending_drag = (context.window, context.area, obj, before, moving.index, moving.co.copy(), 0)
+        _pending_drag = (context.window, context.area, obj.name, before, moving.index, moving.co.copy(), 0)
         bpy.app.timers.register(_watch_drag, first_interval=0.05)
         if self.gizmo:
             # The next keymap item starts the gizmo's drag on the extrusion.
