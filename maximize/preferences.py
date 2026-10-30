@@ -135,7 +135,7 @@ def first_run_setup():
     inputs.use_rotate_around_active = True
     inputs.use_zoom_to_mouse = True
     prefs.first_run_done = True
-    # Start in the Moritz keymap; Preferences > Keymap or the Max sidebar switch back.
+    # Start in the Moritz keymap; Preferences > Keymap switches back.
     from .keymaps import activate
     bpy.app.timers.register(lambda: activate("Moritz") and None, first_interval=0.0)
 
