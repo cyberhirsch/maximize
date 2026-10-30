@@ -42,8 +42,8 @@ EXPECTED = {
     "Align": "maximize.align*",
     "Clone": "maximize.clone*",
     "Delete Objects": "object.delete*",
-    "Fetch": None,
-    "Hold": None,
+    "Fetch": "maximize.fetch*",
+    "Hold": "maximize.hold*",
     "Normal Align": None,
     "Redo Scene Operation": "ed.redo*",
     "Transform Type-In Dialog Toggle": "maximize.transform_typein*",
@@ -92,7 +92,7 @@ EXPECTED = {
     "Show Main Toolbar Toggle": None,
     # Quad menu sets.
     "Lock": None,
-    "Viewports": "wm.call_menu_pie*VIEW3D_MT_view_pie*",
+    "Viewports": "wm.call_menu*MAXIMIZE_MT_point_of_view*",
     "Windows": None,
     # Render.
     "Advanced Lighting Panel": None,
@@ -118,7 +118,7 @@ EXPECTED = {
     "Affect Pivot Only Mode Toggle": "maximize.affect_pivot_only*",
     "Center Point Cycle": "*pivot*",
     "Cycle Selection Method": None,
-    "Display as See-Through Toggle": "view3d.toggle_xray*",
+    "Display as See-Through Toggle": "maximize.see_through_objects*",
     "Hide Selection": "object.hide_view_set*unselected=False*",
     "Hide Unselected": "object.hide_view_set*unselected=True*|mesh.hide*unselected=True*",
     "Isolate Selection": "view3d.localview*",
@@ -301,7 +301,8 @@ def signature(kmi):
     if props is not None:
         for prop in props.bl_rna.properties:
             ident = prop.identifier
-            if ident == "rna_type" or not props.is_property_set(ident):
+            if ident == "rna_type" or not props.is_property_set(ident) or prop.type == 'POINTER':
+                # Pointers are the macro's sub-operators: their address changes every run.
                 continue
             value = getattr(props, ident)
             if isinstance(value, (set, frozenset)):

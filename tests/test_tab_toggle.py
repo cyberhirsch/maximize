@@ -1,7 +1,6 @@
 # Run: moritz.exe --factory-startup --enable-event-simulate --python tests/test_tab_toggle.py
-# Moritz keymap: Tab toggles Object / Edit Mode both ways, also after the 1-5 levels and with Edit
-# Poly. (MX_KEYMAP=Max runs it on the Max keymap, where Tab is Search as in Industry Compatible, so
-# it fails there by design until Seb decides otherwise.)
+# Max and Moritz keymaps: Tab toggles Object / Edit Mode both ways, also after the 1-5 levels and with Edit
+# Poly (Seb, 2026-10-30). MX_KEYMAP=Max for the Max keymap; Moritz by default.
 import os
 import sys
 
