@@ -628,7 +628,10 @@ def _grid_fill(obj, loop):
     if len(loop) % 2:
         # Even out the border with a temporary vertex, fill, then dissolve it: the grid face
         # next to it becomes the one triangle.
-        edge = max(loop, key=lambda e: e.calc_length())
+        # The longest edge; among equal ones the lowest index, so the same border always gives
+        # the same cap (a set's order differs between runs and platforms).
+        bm.edges.index_update()
+        edge = max(loop, key=lambda e: (round(e.calc_length(), 6), -e.index))
         new_edge, extra = bmesh.utils.edge_split(edge, edge.verts[0], 0.5)
         loop = set(loop) | {new_edge}
     _select_only(bm, loop)
