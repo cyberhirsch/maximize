@@ -402,6 +402,7 @@ def build_chamfercyl(b):
     cap_segs = b.input("Cap Segs", INT, 1, 1, 100)
     smooth = b.input("Smooth", BOOL, True)
     quad = b.input("Quad Cap", BOOL, True)
+    relax = qc.relax_input(b)
     f = _clamp_fillet(b, fillet, b.math('MULTIPLY', radius, 2.0), height)
     geo = _round_cylinder(b, radius, height, f, sides, fillet_segs)
     step = b.math('DIVIDE', math.pi / 2, fillet_segs)
@@ -409,8 +410,8 @@ def build_chamfercyl(b):
         b, k, fillet_segs, 0.0, step, b.math('SUBTRACT', radius, f), f, f, height))
     side = _smooth(b, side, smooth)
     inner = b.math('SUBTRACT', radius, f)
-    quads = qc.join_merge(b, side, qc.flat_cap(b, sides, cap_segs, inner, 0.0, False),
-                          qc.flat_cap(b, sides, cap_segs, inner, height, True))
+    quads = qc.join_merge(b, side, qc.flat_cap(b, sides, cap_segs, inner, 0.0, False, relax),
+                          qc.flat_cap(b, sides, cap_segs, inner, height, True, relax))
     return _quad_switch(b, quad, _smooth(b, geo, smooth), quads)
 
 
@@ -418,7 +419,7 @@ def _quad_switch(b, quad, geo, quads):
     return b.node('GeometryNodeSwitch', {"Switch": quad, "False": geo, "True": quads}, input_type='GEOMETRY').outputs[0]
 
 
-def _quad_domes(b, sides, cap_segs, radius, cap, height):
+def _quad_domes(b, sides, cap_segs, radius, cap, height, relax):
     """Capsule and OilTank with quad poles: domes of `radius` and height `cap` on a straight side."""
     step = b.math('DIVIDE', math.pi / 2, cap_segs)
     pole = qc.pole_rings(b, sides, cap_segs)
@@ -426,8 +427,8 @@ def _quad_domes(b, sides, cap_segs, radius, cap, height):
     rings = b.math('SUBTRACT', cap_segs, pole)
     side = qc.lathe(b, sides, b.math('ADD', b.math('MULTIPLY', rings, 2.0), 1.0), lambda k: qc.dome_profile(
         b, k, rings, edge, step, 0.0, radius, cap, height))
-    return qc.join_merge(b, side, qc.dome_cap(b, sides, 1, radius, cap, cap, edge, False),
-                         qc.dome_cap(b, sides, 1, radius, cap, b.math('SUBTRACT', height, cap), edge, True))
+    return qc.join_merge(b, side, qc.dome_cap(b, sides, 1, radius, cap, cap, edge, False, relax),
+                         qc.dome_cap(b, sides, 1, radius, cap, b.math('SUBTRACT', height, cap), edge, True, relax))
 
 
 def build_capsule(b):
@@ -437,10 +438,11 @@ def build_capsule(b):
     cap_segs = b.input("Cap Segs", INT, 6, 1, 100)
     smooth = b.input("Smooth", BOOL, True)
     quad = b.input("Quad Poles", BOOL, True)
+    relax = qc.relax_input(b)
     # Max's Height is overall: the caps are inside it.
     r = _clamp_fillet(b, radius, b.math('MULTIPLY', radius, 2.0), height)
     geo = _quad_switch(b, quad, _round_cylinder(b, r, height, r, sides, cap_segs),
-                       _quad_domes(b, sides, cap_segs, r, r, height))
+                       _quad_domes(b, sides, cap_segs, r, r, height, relax))
     return _smooth(b, geo, smooth)
 
 
@@ -452,9 +454,10 @@ def build_oiltank(b):
     cap_segs = b.input("Cap Segs", INT, 6, 1, 100)
     smooth = b.input("Smooth", BOOL, True)
     quad = b.input("Quad Poles", BOOL, True)
+    relax = qc.relax_input(b)
     cap = _clamp_fillet(b, cap_height, b.math('MULTIPLY', radius, 2.0), height)
     geo = _quad_switch(b, quad, _round_cylinder(b, radius, height, cap, sides, cap_segs, squash=radius),
-                       _quad_domes(b, sides, cap_segs, radius, cap, height))
+                       _quad_domes(b, sides, cap_segs, radius, cap, height, relax))
     return _smooth(b, geo, smooth)
 
 
@@ -467,6 +470,7 @@ def build_spindle(b):
     cap_segs = b.input("Cap Segs", INT, 1, 1, 100)
     smooth = b.input("Smooth", BOOL, True)
     quad = b.input("Quad Cap", BOOL, True)
+    relax = qc.relax_input(b)
     cap = _clamp_fillet(b, cap_height, height, height)
     body = b.math('MAXIMUM', b.math('SUBTRACT', height, b.math('MULTIPLY', cap, 2.0)), 0.0)
     cylinder = b.node('GeometryNodeMeshCylinder', {"Vertices": sides, "Side Segments": h_segs,
@@ -485,12 +489,12 @@ def build_spindle(b):
     # Quad caps: the disc on each cone.
     side = qc.lathe(b, sides, h_segs, lambda k: (radius, b.math('ADD', cap, b.math(
         'MULTIPLY', body, b.math('DIVIDE', k, h_segs)))))
-    quads = qc.join_merge(b, side, qc.cone_cap(b, sides, cap_segs, radius, cap, 0.0, False),
-                          qc.cone_cap(b, sides, cap_segs, radius, cap, height, True))
+    quads = qc.join_merge(b, side, qc.cone_cap(b, sides, cap_segs, radius, cap, 0.0, False, relax),
+                          qc.cone_cap(b, sides, cap_segs, radius, cap, height, True, relax))
     return _smooth(b, _quad_switch(b, quad, geo, quads), smooth)
 
 
-def _quad_prism(b, curve, height, cap_segs):
+def _quad_prism(b, curve, height, cap_segs, relax):
     """The closed, convex `curve` as walls of quads up to `height` with quad caps."""
     count = b.node('GeometryNodeAttributeDomainSize', {"Geometry": curve}, component='CURVE').outputs["Point Count"]
     loop = b.node('GeometryNodeCurveToMesh', {"Curve": curve}).outputs[0]
@@ -502,8 +506,8 @@ def _quad_prism(b, curve, height, cap_segs):
                       b.vmath('SUBTRACT', b.node('GeometryNodeInputPosition').outputs[0], center))
     walls = b.node('GeometryNodeFlipFaces', {"Mesh": walls, "Selection": b.node('FunctionNodeCompare', {
         "A": b.on_faces(outward), "B": 0.0}, data_type='FLOAT', operation='LESS_THAN').outputs[0]}).outputs[0]
-    return qc.join_merge(b, walls, qc.polygon_cap(b, count, cap_segs, curve, 0.0, False),
-                         qc.polygon_cap(b, count, cap_segs, curve, height, True))
+    return qc.join_merge(b, walls, qc.polygon_cap(b, count, cap_segs, curve, 0.0, False, relax),
+                         qc.polygon_cap(b, count, cap_segs, curve, height, True, relax))
 
 
 def build_gengon(b):
@@ -514,10 +518,11 @@ def build_gengon(b):
     fillet_segs = b.input("Fillet Segs", INT, 1, 1, 50)
     cap_segs = b.input("Cap Segs", INT, 1, 1, 100)
     quad = b.input("Quad Cap", BOOL, True)
+    relax = qc.relax_input(b)
     circle = b.node('GeometryNodeCurvePrimitiveCircle', {"Resolution": sides, "Radius": radius}).outputs[0]
     curve = b.node('GeometryNodeFilletCurve', {"Curve": circle, "Radius": fillet, "Limit Radius": True,
                                                "Mode": "Poly", "Count": fillet_segs}).outputs[0]
-    return _quad_switch(b, quad, _extrude_fill(b, curve, height), _quad_prism(b, curve, height, cap_segs))
+    return _quad_switch(b, quad, _extrude_fill(b, curve, height), _quad_prism(b, curve, height, cap_segs, relax))
 
 
 def build_ringwave(b):
@@ -678,8 +683,9 @@ def build_prism(b):
     y = b.math('SQRT', b.math('MAXIMUM', b.math('SUBTRACT', b.math('MULTIPLY', side3, side3), b.math('MULTIPLY', x, x)),
                               0.0))
     quad = b.input("Quad Cap", BOOL, True)
+    relax = qc.relax_input(b)
     curve = _polygon(b, [(0.0, 0.0), (side1, 0.0), (x, y)])
-    return _quad_switch(b, quad, _extrude_fill(b, curve, height), _quad_prism(b, curve, height, 1))
+    return _quad_switch(b, quad, _extrude_fill(b, curve, height), _quad_prism(b, curve, height, 1, relax))
 
 
 BUILDERS = {

@@ -10,6 +10,10 @@ in, as Edit Poly's Cap does). Each primitive maps the disc onto its cap: flat (C
 (Sphere, Capsule, OilTank) or a cone (Spindle). The sides are a lathe: rings of Sides vertices at
 the profile's radius and height.
 
+Cap Relax moves the disc's inner vertices toward the average of their neighbours (a Laplacian relax
+on the flat disc, the rim held), so the grid pulls in and its cells even out; 0 keeps the grid as
+laid out.
+
 UVs follow Blender's Cylinder node: the sides in the upper half, the caps as two circles below.
 """
 
@@ -87,8 +91,44 @@ def _rotate(b, x, y, angle):
             b.math('ADD', b.math('MULTIPLY', x, s), b.math('MULTIPLY', y, c)))
 
 
-def disc(b, sides, rings, uv_center, mirror=False):
-    """The unit quad disc in the XY plane, facing up, with UVs in the circle at `uv_center`."""
+def relax_input(b):
+    """The primitive's Cap Relax input (after Quad Cap / Quad Poles)."""
+    return b.input("Cap Relax", 'NodeSocketFloat', 0.5, 0.0, 1.0, subtype='FACTOR')
+
+
+def _relax(b, geo, amount, cells, rings):
+    """The disc's inner vertices `amount` (0-1) of the way to where repeated neighbour averaging
+    takes them; the rim (radius 1) stays put, so the cap keeps its outline and plane."""
+    position = b.node('GeometryNodeInputPosition').outputs[0]
+    geo = b.node('GeometryNodeStoreNamedAttribute', {"Geometry": geo, "Name": "_mx_laid", "Value": position},
+                 data_type='FLOAT_VECTOR', domain='POINT').outputs[0]
+    # Enough steps for the smoothing to settle across the disc (it spreads about one edge per step
+    # and settles with the square of the distance), none when there is nothing to relax.
+    across = b.math('ADD', cells, rings)
+    steps = _clamp(b, b.math('MULTIPLY', b.math('MULTIPLY', across, across), 2.0), 4.0, 200.0)
+    steps = b.math('MULTIPLY', steps, b.math('CEIL', _clamp(b, amount, 0.0, 1.0)))
+    start = b.node('GeometryNodeRepeatInput')
+    end = b.node('GeometryNodeRepeatOutput')
+    start.pair_with_output(end)
+    b.set(start.inputs["Iterations"], steps)
+    b.set(start.inputs["Geometry"], geo)
+    blurred = b.node('GeometryNodeBlurAttribute', {"Value": position, "Iterations": 1},
+                     data_type='FLOAT_VECTOR').outputs[0]
+    inner = _compare(b, b.vmath('LENGTH', position), 1.0 - 1e-4, 'LESS_THAN')
+    b.set(end.inputs["Geometry"], b.node('GeometryNodeSetPosition', {
+        "Geometry": start.outputs["Geometry"], "Selection": inner, "Position": blurred}).outputs[0])
+    laid = b.node('GeometryNodeInputNamedAttribute', {"Name": "_mx_laid"}, data_type='FLOAT_VECTOR').outputs[0]
+    mix = b.node('ShaderNodeMix', {"Factor": _clamp(b, amount, 0.0, 1.0)}, data_type='VECTOR')
+    b.set(mix.inputs[4], laid)
+    b.set(mix.inputs[5], position)
+    geo = b.node('GeometryNodeSetPosition', {"Geometry": end.outputs["Geometry"],
+                                             "Position": mix.outputs[1]}).outputs[0]
+    return b.node('GeometryNodeRemoveAttribute', {"Geometry": geo, "Name": "_mx_laid"}).outputs[0]
+
+
+def disc(b, sides, rings, uv_center, mirror=False, relax=0.0):
+    """The unit quad disc in the XY plane, facing up, with UVs in the circle at `uv_center`; `relax`
+    is Cap Relax (0-1)."""
     border, columns, rows = grid_size(b, sides)
     cells = b.math('MULTIPLY', b.math('MAXIMUM', columns, rows), 0.5)
     inner = b.math('DIVIDE', cells, b.math('ADD', cells, rings))
@@ -127,6 +167,7 @@ def disc(b, sides, rings, uv_center, mirror=False):
     for geo in (strip, grid):
         b.set(join.inputs[0], geo)
     geo = b.node('GeometryNodeMergeByDistance', {"Geometry": join.outputs[0], "Distance": 1e-5}).outputs[0]
+    geo = _relax(b, geo, relax, cells, rings)
     _nx, _ny, nz = b.separate(b.node('GeometryNodeInputNormal').outputs[0])
     geo = b.node('GeometryNodeFlipFaces', {"Mesh": geo, "Selection": _compare(b, nz, 0.0, 'LESS_THAN')}).outputs[0]
     px, py, _pz = b.separate(b.node('GeometryNodeInputPosition').outputs[0])
@@ -135,17 +176,12 @@ def disc(b, sides, rings, uv_center, mirror=False):
                                      b.math('ADD', b.math('MULTIPLY', py, UV_RADIUS), uv_center[1])))
 
 
-def _pole_gap(b, sides, rings):
-    """How far the disc's vertex nearest the center is from it: 0 unless the grid has an odd number
-    of columns or rows. Domes and cones put those vertices at the pole's height, so the height stays
-    exact (a small flat top)."""
-    _border, columns, rows = grid_size(b, sides)
-    cells = b.math('MULTIPLY', b.math('MAXIMUM', columns, rows), 0.5)
-    inner = b.math('DIVIDE', cells, b.math('ADD', cells, rings))
-    u = b.math('DIVIDE', b.math('FLOORED_MODULO', columns, 2.0), columns)
-    v = b.math('DIVIDE', b.math('FLOORED_MODULO', rows, 2.0), rows)
-    du, dv = _square_to_disc(b, u, v)
-    return b.math('MULTIPLY', inner, b.math('SQRT', b.math('ADD', b.math('MULTIPLY', du, du), b.math('MULTIPLY', dv, dv))))
+def _pole_gap(b, geo, s):
+    """How far the disc's vertex nearest the center is from it (`s` the radius): 0 unless the grid
+    has an odd number of columns or rows. Domes and cones put those vertices at the pole's height,
+    so the height stays exact (a small flat top)."""
+    return b.node('GeometryNodeAttributeStatistic', {"Geometry": geo, "Attribute": s},
+                  data_type='FLOAT', domain='POINT').outputs["Min"]
 
 
 def _from_pole(b, s, gap):
@@ -164,38 +200,38 @@ def _disc_xy(b):
     return x, y, b.math('SQRT', b.math('ADD', b.math('MULTIPLY', x, x), b.math('MULTIPLY', y, y)))
 
 
-def flat_cap(b, sides, rings, radius, z, top):
+def flat_cap(b, sides, rings, radius, z, top, relax=0.0):
     """A flat cap of `radius` at height `z`, facing up (`top`) or down."""
-    geo = disc(b, sides, rings, TOP_UV if top else BOTTOM_UV, mirror=not top)
+    geo = disc(b, sides, rings, TOP_UV if top else BOTTOM_UV, mirror=not top, relax=relax)
     x, y, _s = _disc_xy(b)
     return _map(b, geo, b.combine(b.math('MULTIPLY', x, radius), b.math('MULTIPLY', y, radius), z), not top)
 
 
-def dome_cap(b, sides, rings, radius, height, center, edge, top):
+def dome_cap(b, sides, rings, radius, height, center, edge, top, relax=0.0):
     """A quad pole: the disc on a dome of `radius` and `height` around `center` (an ellipsoid when
     they differ), out to `edge` radians from the pole."""
-    geo = disc(b, sides, rings, TOP_UV if top else BOTTOM_UV, mirror=not top)
+    geo = disc(b, sides, rings, TOP_UV if top else BOTTOM_UV, mirror=not top, relax=relax)
     x, y, s = _disc_xy(b)
     polar = b.math('MULTIPLY', s, edge)
     out = b.math('DIVIDE', b.math('MULTIPLY', radius, b.math('SINE', polar)), b.math('MAXIMUM', s, 1e-9))
-    z = b.math('MULTIPLY', height, b.math('COSINE', b.math('MULTIPLY', _from_pole(b, s, _pole_gap(b, sides, rings)), edge)))
+    z = b.math('MULTIPLY', height, b.math('COSINE', b.math('MULTIPLY', _from_pole(b, s, _pole_gap(b, geo, s)), edge)))
     z = b.math('ADD', center, z if top else b.math('MULTIPLY', z, -1.0))
     return _map(b, geo, b.combine(b.math('MULTIPLY', x, out), b.math('MULTIPLY', y, out), z), not top)
 
 
-def cone_cap(b, sides, rings, radius, height, apex, top):
+def cone_cap(b, sides, rings, radius, height, apex, top, relax=0.0):
     """The disc on a cone of `radius` and `height` with its apex at `apex` (pointing up when
     `top`)."""
-    geo = disc(b, sides, rings, TOP_UV if top else BOTTOM_UV, mirror=not top)
+    geo = disc(b, sides, rings, TOP_UV if top else BOTTOM_UV, mirror=not top, relax=relax)
     x, y, s = _disc_xy(b)
-    drop = b.math('MULTIPLY', height, _from_pole(b, s, _pole_gap(b, sides, rings)))
+    drop = b.math('MULTIPLY', height, _from_pole(b, s, _pole_gap(b, geo, s)))
     z = b.math('SUBTRACT', apex, drop) if top else b.math('ADD', apex, drop)
     return _map(b, geo, b.combine(b.math('MULTIPLY', x, radius), b.math('MULTIPLY', y, radius), z), not top)
 
 
-def polygon_cap(b, sides, rings, curve, z, top):
+def polygon_cap(b, sides, rings, curve, z, top, relax=0.0):
     """A flat cap filling the closed, convex `curve` (its points are the rim) at height `z`."""
-    geo = disc(b, sides, rings, TOP_UV if top else BOTTOM_UV, mirror=not top)
+    geo = disc(b, sides, rings, TOP_UV if top else BOTTOM_UV, mirror=not top, relax=relax)
     x, y, s = _disc_xy(b)
     position = b.node('GeometryNodeInputPosition').outputs[0]
     center = b.node('GeometryNodeAttributeStatistic', {"Geometry": curve, "Attribute": position},

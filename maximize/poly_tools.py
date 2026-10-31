@@ -648,6 +648,24 @@ def _grid_fill(obj, loop):
     return ok
 
 
+def relax_cap(faces, border, amount, steps=500):
+    """Move the cap's inner vertices `amount` (0-1) of the way to where repeated neighbour averaging
+    takes them (a Laplacian relax); the `border` vertices stay, so a flat border keeps a flat cap."""
+    free = {v for f in faces for v in f.verts} - set(border)
+    if amount <= 0.0 or not free:
+        return
+    laid = {v: v.co.copy() for v in free}
+    for _ in range(steps):
+        moved = {v: sum((e.other_vert(v).co for e in v.link_edges), Vector()) / len(v.link_edges) for v in free}
+        change = max((moved[v] - v.co).length for v in free)
+        for v, co in moved.items():
+            v.co = co
+        if change < 1e-6:
+            break
+    for v in free:
+        v.co = laid[v].lerp(v.co, min(amount, 1.0))
+
+
 class MAXIMIZE_OT_cap(_EditMesh, Operator):
     """Cap the selected borders: a quad grid (Ctrl: one polygon, as in Max; Shift: an inset ring
     with a quad grid inside)"""
@@ -660,6 +678,9 @@ class MAXIMIZE_OT_cap(_EditMesh, Operator):
         ('INSET', "Inset Quad Cap", "A ring of quads along the border, then a quad grid inside (Shift)")))
     ring: FloatProperty(name="Ring Width", default=0.2, min=0.01, max=0.9, subtype='FACTOR',
                         description="Inset ring width, as a part of the border's radius")
+    relax: FloatProperty(name="Cap Relax", default=0.5, min=0.0, max=1.0, subtype='FACTOR',
+                         description="Even out the grid: its cells move toward the average of their "
+                         "neighbours, the border stays (0: the grid as filled)")
 
     def invoke(self, context, event):
         self.mode = 'NGON' if event.ctrl else 'INSET' if event.shift else 'QUAD'
@@ -686,6 +707,8 @@ class MAXIMIZE_OT_cap(_EditMesh, Operator):
         for loop in loops:
             bm = bmesh.from_edit_mesh(obj.data)
             loop = {e for e in loop if e.is_valid}
+            bm.faces.index_update()
+            count = len(bm.faces)
             if self.mode == 'INSET' and len(loop) >= 3:
                 face = bmesh.ops.holes_fill(bm, edges=list(loop), sides=0)["faces"][0]
                 centre = face.calc_center_median()
@@ -699,6 +722,16 @@ class MAXIMIZE_OT_cap(_EditMesh, Operator):
                 bmesh.ops.holes_fill(bm, edges=[e for e in loop if e.is_valid], sides=0)
                 bmesh.update_edit_mesh(obj.data)
                 failed += 1
+                continue
+            bm = bmesh.from_edit_mesh(obj.data)
+            bm.faces.index_update()
+            faces = [f for f in bm.faces if f.index >= count]
+            # The border: what also touches the walls (an odd border's merge may keep the
+            # temporary vertex in place of the original one).
+            new = set(faces)
+            border = {v for f in faces for v in f.verts if v.is_boundary or any(g not in new for g in v.link_faces)}
+            relax_cap(faces, border, self.relax)
+            bmesh.update_edit_mesh(obj.data)
         if failed:
             self.report({'INFO'}, "{:d} border(s) got one polygon: no quad grid fits".format(failed))
         return {'FINISHED'}

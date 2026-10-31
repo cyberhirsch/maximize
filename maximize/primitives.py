@@ -73,6 +73,7 @@ def _build_sphere(b):
     segments = b.input("Segments", INT, 32, 4, 500)
     smooth = b.input("Smooth", BOOL, True)
     quad = b.input("Quad Poles", BOOL, True)
+    relax = qc.relax_input(b)
     rings = b.math('MAXIMUM', b.math('FLOOR', b.math('DIVIDE', segments, 2.0)), 3.0)
     sphere = b.node('GeometryNodeMeshUVSphere', {"Segments": segments, "Rings": rings, "Radius": radius})
     geo = b.store_uv(sphere.outputs["Mesh"], sphere.outputs["UV Map"])
@@ -86,7 +87,7 @@ def _build_sphere(b):
         return (b.math('MULTIPLY', radius, b.math('SINE', polar)),
                 b.math('MULTIPLY', radius, b.math('MULTIPLY', b.math('COSINE', polar), -1.0)))
     side = qc.lathe(b, segments, b.math('SUBTRACT', rings, b.math('MULTIPLY', pole, 2.0)), profile)
-    quads = qc.join_merge(b, side, *(qc.dome_cap(b, segments, 1, radius, radius, 0.0, edge, top) for top in (True, False)))
+    quads = qc.join_merge(b, side, *(qc.dome_cap(b, segments, 1, radius, radius, 0.0, edge, top, relax) for top in (True, False)))
     geo = b.node('GeometryNodeSwitch', {"Switch": quad, "False": geo, "True": quads}, input_type='GEOMETRY').outputs[0]
     return b.node('GeometryNodeSetShadeSmooth', {"Mesh": geo, "Shade Smooth": smooth}).outputs[0]
 
@@ -103,6 +104,7 @@ def _build_cylinder(b, cone=False):
     sides = b.input("Sides", INT, 24, 3, 500)
     smooth = b.input("Smooth", BOOL, True)
     quad = b.input("Quad Cap", BOOL, True)
+    relax = qc.relax_input(b)
     if cone:
         prim = b.node('GeometryNodeMeshCone', {
             "Vertices": sides, "Side Segments": h_segs, "Fill Segments": c_segs,
@@ -118,11 +120,11 @@ def _build_cylinder(b, cone=False):
         # The Cone node already starts at z = 0.
         geo = b.node('GeometryNodeTransform', {
             "Geometry": geo, "Translation": b.combine(z=b.math('MULTIPLY', height, 0.5))}).outputs[0]
-    quads = _quad_cylinder(b, radius1, radius2 if cone else radius1, height, h_segs, c_segs, sides, smooth)
+    quads = _quad_cylinder(b, radius1, radius2 if cone else radius1, height, h_segs, c_segs, sides, smooth, relax)
     return b.node('GeometryNodeSwitch', {"Switch": quad, "False": geo, "True": quads}, input_type='GEOMETRY').outputs[0]
 
 
-def _quad_cylinder(b, radius1, radius2, height, h_segs, c_segs, sides, smooth):
+def _quad_cylinder(b, radius1, radius2, height, h_segs, c_segs, sides, smooth, relax):
     """Cylinder and Cone with quad caps; a radius of 0 is a point (the cone's tip)."""
     def profile(k):
         f = b.math('DIVIDE', k, h_segs)
@@ -131,7 +133,7 @@ def _quad_cylinder(b, radius1, radius2, height, h_segs, c_segs, sides, smooth):
                                                  "Shade Smooth": smooth}).outputs[0]
     caps = []
     for radius, z, top in ((radius1, 0.0, False), (radius2, height, True)):
-        cap = qc.flat_cap(b, sides, c_segs, radius, z, top)
+        cap = qc.flat_cap(b, sides, c_segs, radius, z, top, relax)
         point = b.node('FunctionNodeCompare', {"A": radius, "B": 1e-6}, data_type='FLOAT',
                        operation='LESS_THAN').outputs[0]
         caps.append(b.node('GeometryNodeSwitch', {"Switch": point, "False": cap}, input_type='GEOMETRY').outputs[0])
