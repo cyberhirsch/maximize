@@ -816,13 +816,21 @@ class MAXIMIZE_GGT_slice_plane(GizmoGroup):
         self.plane.color = (1.0, 0.85, 0.2)
         self.plane.alpha = 0.25
         self.plane.hide_select = True
+        # A small yellow ring in the plane's color; its "offset" target is the plane's position.
         self.move = self.gizmos.new("GIZMO_GT_move_3d")
-        self.move.draw_options = {'FILL', 'ALIGN_VIEW'}
+        self.move.draw_options = {'FILL_SELECT', 'ALIGN_VIEW'}
         self.move.target_set_prop("offset", wm, "maximize_slice_location")
+        self.move.color = (1.0, 0.85, 0.2)
+        self.move.alpha = 0.6
+        self.move.alpha_highlight = 1.0
+        self.move.scale_basis = 0.2
         self.dials = []
         for index, color in ((0, (1.0, 0.3, 0.3)), (1, (0.4, 1.0, 0.4))):
             dial = self.gizmos.new("GIZMO_GT_dial_3d")
-            dial.target_set_prop("offset", wm, "maximize_slice_rotation", index=index)
+            # target_set_prop can't bind a single-value dial to element 1 of an array
+            # (rna_wm_gizmo_api.cc: "index must be below 1"), so get and set it by hand.
+            dial.target_set_handler("offset", get=self._rotation_get(wm, index),
+                                    set=self._rotation_set(wm, index))
             dial.color = color
             dial.alpha = 0.6
             dial.alpha_highlight = 1.0
@@ -831,18 +839,38 @@ class MAXIMIZE_GGT_slice_plane(GizmoGroup):
             gz.color_highlight = (1.0, 1.0, 0.6)
         self.draw_prepare(context)
 
+    @staticmethod
+    def _rotation_get(wm, index):
+        return lambda: wm.maximize_slice_rotation[index]
+
+    @staticmethod
+    def _rotation_set(wm, index):
+        def set_value(value):
+            wm.maximize_slice_rotation[index] = value
+        return set_value
+
     def draw_prepare(self, context):
         co, _no = _slice_plane_world(context.window_manager)
         rot = Euler(context.window_manager.maximize_slice_rotation).to_matrix().to_4x4()
         base = Matrix.Translation(co)
         self.plane.matrix_basis = base @ rot
         self.plane.scale_basis = 2.0
-        self.move.matrix_basis = Matrix.Translation(co)
+        # The move gizmo adds its target (the location) to its matrix itself
+        # (move3d_gizmo.cc, gizmo_move_matrix_basis_get), so no translation here.
+        self.move.matrix_basis = Matrix.Identity(4)
         # The dials turn the plane about its own X and Y axes.
         x_axis = Matrix.Rotation(math.radians(90.0), 4, 'Y')
         y_axis = Matrix.Rotation(math.radians(-90.0), 4, 'X')
         self.dials[0].matrix_basis = base @ x_axis
         self.dials[1].matrix_basis = base @ y_axis
+        # A dial seen edge-on is a line through the center: it can't be turned and would take the
+        # move handle's clicks, so it hides until the view turns.
+        rv3d = context.region_data
+        if rv3d is not None:
+            view = rv3d.view_rotation @ Vector((0.0, 0.0, 1.0))
+            for dial in self.dials:
+                normal = dial.matrix_basis.to_3x3() @ Vector((0.0, 0.0, 1.0))
+                dial.hide = abs(normal.dot(view)) < 0.2
 
 
 def draw_slice_plane(layout, context):
@@ -1173,6 +1201,268 @@ class MAXIMIZE_OT_remove_loop(_EditMesh, Operator):
         return {'FINISHED'}
 
 
+# ------------------------------------------------------------------------------
+# SwiftLoop: Max's mode for inserting loops with clicks in the viewport
+
+def _ring(edge):
+    """The edge ring through `edge`, in order, as (edge, vertex on the side of edge.verts[0]) pairs,
+    and whether it closes. It stops at polygons that aren't quads and at the mesh border."""
+    ring = [(edge, edge.verts[0])]
+    seen = {edge}
+    for first, start in enumerate(list(edge.link_loops)):
+        # The loop runs from its .vert along its edge; the side vertex picks the matching end across.
+        loop, side = start, edge.verts[0]
+        chain = []
+        while len(loop.face.verts) == 4:
+            across = loop.link_loop_next.link_loop_next
+            side = (loop.link_loop_prev.vert if loop.vert is side else across.vert)
+            if across.edge in seen:
+                # Back at the start: a closed ring.
+                return ring + chain if first == 0 else list(reversed(chain)) + ring, True
+            seen.add(across.edge)
+            chain.append((across.edge, side))
+            loop = across.link_loop_radial_next
+            if loop is across:
+                break
+        ring = ring + chain if first == 0 else list(reversed(chain)) + ring
+    return ring, False
+
+
+def _edge_loop(edge):
+    """The edges of the edge loop through `edge` (Remove Loop's and Ctrl+click's loop)."""
+    loop = {edge}
+    for vert in edge.verts:
+        e, v = edge, vert
+        while True:
+            e = _opposite(e, v)
+            if e is None or e in loop:
+                break
+            loop.add(e)
+            v = e.other_vert(v)
+    return loop
+
+
+class MAXIMIZE_OT_swift_loop(Operator):
+    """SwiftLoop: click edges in the viewport to insert loops there, until right-click or Esc.
+    Shift+click: a loop that follows the surface's curve. Ctrl+click: select the loop.
+    Ctrl+Shift+click: remove the loop. Alt+drag: slide the loop"""
+    bl_idname = "maximize.swift_loop"
+    bl_label = "Swift Loop"
+    bl_options = {'REGISTER'}
+
+    # The Edit Poly panel shows the button pressed while the mode runs.
+    running = False
+    # A click on the button while the mode runs ends it before the button sees the click.
+    ended_by_click = False
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'EDIT_MESH'
+
+    def invoke(self, context, _event):
+        if MAXIMIZE_OT_swift_loop.running or MAXIMIZE_OT_swift_loop.ended_by_click:
+            # The button again: Max turns the mode off.
+            MAXIMIZE_OT_swift_loop.running = MAXIMIZE_OT_swift_loop.ended_by_click = False
+            return {'CANCELLED'}
+        self._hover = None
+        self._trees = {}
+        self._handle = bpy.types.SpaceView3D.draw_handler_add(self._draw, (), 'WINDOW', 'POST_VIEW')
+        context.window_manager.modal_handler_add(self)
+        context.window.cursor_modal_set('CROSSHAIR')
+        context.workspace.status_text_set(
+            "SwiftLoop: click an edge to insert a loop  ·  Shift: flow  ·  Ctrl: select loop  ·  "
+            "Ctrl+Shift: remove loop  ·  Alt+drag: slide  ·  right-click / Esc: done")
+        MAXIMIZE_OT_swift_loop.running = True
+        self._redraw(context)
+        return {'RUNNING_MODAL'}
+
+    def _end(self, context):
+        bpy.types.SpaceView3D.draw_handler_remove(self._handle, 'WINDOW')
+        context.window.cursor_modal_restore()
+        context.workspace.status_text_set(None)
+        MAXIMIZE_OT_swift_loop.running = False
+        self._redraw(context)
+        return {'FINISHED'}
+
+    @staticmethod
+    def _redraw(context):
+        for area in context.window.screen.areas:
+            if area.type in {'VIEW_3D', 'PROPERTIES'}:
+                area.tag_redraw()
+
+    def _region_at(self, context, event):
+        for area in context.window.screen.areas:
+            if area.type != 'VIEW_3D':
+                continue
+            for region in area.regions:
+                if (region.type == 'WINDOW' and region.x <= event.mouse_x < region.x + region.width and
+                        region.y <= event.mouse_y < region.y + region.height):
+                    return area, region
+        return None, None
+
+    def _tree(self, obj):
+        from mathutils.bvhtree import BVHTree
+        if obj.name not in self._trees:
+            bm = bmesh.from_edit_mesh(obj.data)
+            bm.faces.ensure_lookup_table()
+            self._trees[obj.name] = BVHTree.FromBMesh(bm)
+        return self._trees[obj.name]
+
+    def _pick(self, context, region, event):
+        """The edge under the mouse: (object, edge index, fraction from edge.verts[0]) or None."""
+        co = (event.mouse_x - region.x, event.mouse_y - region.y)
+        origin = view3d_utils.region_2d_to_origin_3d(region, region.data, co)
+        direction = view3d_utils.region_2d_to_vector_3d(region, region.data, co)
+        best = None
+        for obj in _edit_meshes(context):
+            inv = obj.matrix_world.inverted_safe()
+            o = inv @ origin
+            d = (inv.to_3x3() @ direction).normalized()
+            hit, _normal, index, _dist = self._tree(obj).ray_cast(o, d)
+            if hit is None:
+                continue
+            depth = (obj.matrix_world @ hit - origin).length
+            if best is not None and depth >= best[0]:
+                continue
+            bm = bmesh.from_edit_mesh(obj.data)
+            bm.faces.ensure_lookup_table()
+            face = bm.faces[index]
+            if face.hide:
+                continue
+
+            def distance(e):
+                p, t = geometry.intersect_point_line(hit, e.verts[0].co, e.verts[1].co)
+                t = min(max(t, 0.0), 1.0)
+                return (e.verts[0].co.lerp(e.verts[1].co, t) - hit).length, t
+            edge = min(face.edges, key=lambda e: distance(e)[0])
+            t = min(max(distance(edge)[1], 0.02), 0.98)
+            best = (depth, obj, edge.index, t)
+        return best[1:] if best else None
+
+    def _ring_points(self, obj, edge_index, t):
+        bm = bmesh.from_edit_mesh(obj.data)
+        bm.edges.ensure_lookup_table()
+        edge = bm.edges[edge_index]
+        ring, closed = _ring(edge)
+        mw = obj.matrix_world
+        points = [mw @ side.co.lerp(e.other_vert(side).co, t) for e, side in ring]
+        return points, closed
+
+    def _draw(self):
+        if self._hover is None:
+            return
+        import gpu
+        from gpu_extras.batch import batch_for_shader
+        obj, edge_index, t = self._hover
+        try:
+            points, closed = self._ring_points(obj, edge_index, t)
+        except (ReferenceError, IndexError):
+            return
+        if len(points) < 2:
+            return
+        lines = []
+        for a, b in zip(points, points[1:] + (points[:1] if closed else [])):
+            lines += [a, b]
+        shader = gpu.shader.from_builtin('POLYLINE_UNIFORM_COLOR')
+        viewport = gpu.state.viewport_get()
+        shader.uniform_float("viewportSize", (viewport[2], viewport[3]))
+        shader.uniform_float("lineWidth", 2.0)
+        shader.uniform_float("color", (1.0, 0.85, 0.2, 1.0))
+        gpu.state.blend_set('ALPHA')
+        gpu.state.depth_test_set('NONE')
+        batch_for_shader(shader, 'LINES', {"pos": lines}).draw(shader)
+        gpu.state.blend_set('NONE')
+
+    def _insert(self, obj, edge_index, t, flow):
+        bm = bmesh.from_edit_mesh(obj.data)
+        bm.edges.ensure_lookup_table()
+        ring, _closed = _ring(bm.edges[edge_index])
+        percents = {e: (t if e.verts[0] is side else 1.0 - t) for e, side in ring}
+        count = len(bm.verts)
+        bmesh.ops.subdivide_edges(bm, edges=[e for e, _side in ring], cuts=1, edge_percents=percents,
+                                  use_grid_fill=True)
+        # New vertices come last (bmesh's Python wrappers can't be compared across calls).
+        bm.verts.index_update()
+        new = {v for v in bm.verts if v.index >= count}
+        # Max leaves the new loop selected.
+        for e in bm.edges:
+            e.select_set(False)
+        loop = [e for v in new for e in v.link_edges if e.other_vert(v).index >= count]
+        for e in loop:
+            e.select_set(True)
+        bm.select_flush_mode()
+        if flow:
+            targets = [(v, _flow_target(v, set(loop))) for v in new]
+            for v, co in targets:
+                if co is not None:
+                    v.co = co
+        bmesh.update_edit_mesh(obj.data, loop_triangles=True)
+
+    @staticmethod
+    def _select_loop(obj, edge_index):
+        bm = bmesh.from_edit_mesh(obj.data)
+        bm.edges.ensure_lookup_table()
+        loop = _edge_loop(bm.edges[edge_index])
+        for v in bm.verts:
+            v.select_set(False)
+        for e in loop:
+            e.select_set(True)
+        bm.select_flush_mode()
+        bmesh.update_edit_mesh(obj.data)
+
+    def modal(self, context, event):
+        if context.mode != 'EDIT_MESH' or not MAXIMIZE_OT_swift_loop.running:
+            return self._end(context)
+        if event.type in {'RIGHTMOUSE', 'ESC'} and event.value == 'PRESS':
+            return self._end(context)
+        area, region = self._region_at(context, event)
+        if event.type == 'MOUSEMOVE':
+            hover = self._pick(context, region, event) if region else None
+            if hover != self._hover:
+                self._hover = hover
+                self._redraw(context)
+            return {'PASS_THROUGH'}
+        if event.type != 'LEFTMOUSE':
+            return {'PASS_THROUGH'}
+        if event.value != 'PRESS':
+            # The click's release, click and drag events are the mode's too, not the select tool's.
+            return {'RUNNING_MODAL'} if region else {'PASS_THROUGH'}
+        if region is None:
+            # A click outside the viewports (a panel button) ends the mode and goes on to it.
+            self._end(context)
+            MAXIMIZE_OT_swift_loop.ended_by_click = True
+
+            def forget():
+                MAXIMIZE_OT_swift_loop.ended_by_click = False
+            bpy.app.timers.register(forget, first_interval=0.3)
+            return {'PASS_THROUGH'}
+        self._hover = self._pick(context, region, event)
+        if self._hover is None:
+            return {'RUNNING_MODAL'}
+        obj, edge_index, t = self._hover
+        with context.temp_override(area=area, region=region):
+            if event.alt:
+                self._select_loop(obj, edge_index)
+                bpy.ops.transform.edge_slide('INVOKE_DEFAULT')
+                self._trees.clear()
+                return {'RUNNING_MODAL'}
+            if event.ctrl:
+                self._select_loop(obj, edge_index)
+                if event.shift:
+                    bpy.ops.mesh.dissolve_edges(use_verts=True)
+                    message = "SwiftLoop: Remove Loop"
+                else:
+                    message = "SwiftLoop: Select Loop"
+            else:
+                self._insert(obj, edge_index, t, flow=event.shift)
+                message = "SwiftLoop"
+            bpy.ops.ed.undo_push(message=message)
+        self._trees.clear()
+        self._hover = None
+        self._redraw(context)
+        return {'RUNNING_MODAL'}
+
+
 def _opposite(edge, vert):
     """The edge across `vert` from `edge` in the edge loop (one that shares no polygon with it), or None
     where the loop stops: at a pole or the mesh border."""
@@ -1335,6 +1625,7 @@ classes = (
     MAXIMIZE_OT_dot_loop,
     MAXIMIZE_OT_insert_loop,
     MAXIMIZE_OT_remove_loop,
+    MAXIMIZE_OT_swift_loop,
     MAXIMIZE_OT_set_material_id,
     MAXIMIZE_OT_select_material_id,
     MAXIMIZE_OT_make_planar_axis,

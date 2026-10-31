@@ -331,6 +331,8 @@ def _create_object(context, kind, matrix):
         other.select_set(False)
     obj.select_set(True)
     context.view_layer.objects.active = obj
+    # The Create tab shows its Parameters (Moritz).
+    context.window_manager.maximize_created = obj.name
     return obj
 
 
@@ -460,12 +462,20 @@ class MAXIMIZE_OT_add_primitive(Operator):
         self._apply(event)
         # Setting modifier inputs from Python doesn't tag the object for re-evaluation.
         self._obj.update_tag()
+        # The Create tab's Parameters follow the drag.
+        for area in bpy.context.window.screen.areas:
+            if area.type == 'PROPERTIES':
+                area.tag_redraw()
 
     def _apply(self, event):
         step = STEPS[self.kind][self._step]
         if step == 'HEIGHT':
             dy = self._mouse(event)[1] - self._ref_y
-            self._input("Height").value = abs(dy) * self._pixel
+            height = abs(dy) * self._pixel
+            if self.kind == 'CAPSULE':
+                # Max's Capsule height is overall, so never below its diameter.
+                height = max(height, 2.0 * self._input("Radius").value)
+            self._input("Height").value = height
             return
         hit = self._hit(event)
         if hit is None:
@@ -484,6 +494,9 @@ class MAXIMIZE_OT_add_primitive(Operator):
         elif step == 'RADIUS':
             name, scale = radius_input(self.kind)
             self._input(name).value = d.length * scale
+            if self.kind == 'CAPSULE':
+                # Its caps fit inside the height: a sphere while the radius is dragged, as in Max.
+                self._input("Height").value = 2.0 * d.length * scale
         elif step == 'RADIUS2':
             radius = d.length
             if self.kind == 'TORUS':

@@ -192,7 +192,6 @@ ALIASES = (
      "Weld the selected vertices onto the last selected one"),
     ("collapse_sub", "Collapse", "mesh.merge", {"type": 'COLLAPSE'}, 'POLY',
      "Collapse each selected group of elements to a single vertex"),
-    ("swift_loop", "Swift Loop", "mesh.loopcut_slide", {}, 'POLY', "Insert an edge loop and slide it"),
     ("cut", "Cut", "mesh.knife_tool", {}, 'POLY', "Cut new edges across polygons"),
     ("paint_connect", "Paint Connect", "mesh.knife_tool", {"use_occlude_geometry": True}, 'POLY',
      "Draw across polygons to connect their edges (Blender's Knife: Ctrl snaps to edge middles, Enter ends)"),

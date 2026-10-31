@@ -69,6 +69,7 @@ class MAXIMIZE_MT_edit_poly(Menu):
         layout.operator("maximize.chamfer")
         layout.operator("maximize.connect")
         layout.operator("maximize.delete_subobject", text="Delete")
+        layout.operator("maximize.swift_loop")
         _aliases(layout, 'POLY')
 
 
@@ -149,7 +150,7 @@ def _header_menu(self, context):
 # Menu -> entries: an operator, or ("menu", idname).
 _MORITZ_ENTRIES = {
     "VIEW3D_MT_edit_mesh_vertices": ("maximize.chamfer", "maximize.connect"),
-    "VIEW3D_MT_edit_mesh_edges": ("maximize.chamfer", "maximize.connect"),
+    "VIEW3D_MT_edit_mesh_edges": ("maximize.chamfer", "maximize.connect", "maximize.swift_loop"),
     "VIEW3D_MT_edit_mesh_delete": ("maximize.delete_subobject",),
     "VIEW3D_MT_transform_object": ("maximize.transform_typein", "maximize.affect_pivot_only",
                                    "maximize.center_pivot", "maximize.align_pivot_world"),
@@ -424,6 +425,10 @@ def draw_poly_geometry(layout, context):
         if op == "bevel_poly":
             # The Max vocabulary renames Blender's Bevel to Chamfer: keep Max's Bevel.
             grid.operator("maximize." + op, text="Bevel", translate=False)
+        elif op == "swift_loop":
+            # Pressed while the mode runs, as in Max.
+            from .poly_tools import MAXIMIZE_OT_swift_loop
+            grid.operator("maximize." + op, icon=tool_icon(op), depress=MAXIMIZE_OT_swift_loop.running)
         else:
             grid.operator("maximize." + op, icon=tool_icon(op))
     grid.pad()
@@ -805,6 +810,38 @@ class MAXIMIZE_PT_vertex_paint_rollout(_ModifierRollouts, Panel):
         vertex_paint.draw(self.layout, context, self.custom_data)
 
 
+class _CreateRollouts:
+    """Moritz's Create tab, below Name and Color: the object just created, as in Max, until another
+    object is picked."""
+    bl_space_type = 'PROPERTIES'
+    bl_region_type = 'WINDOW'
+    bl_context = "create"
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return (has_command_panel() and context.mode == 'OBJECT' and obj is not None and
+                obj.name == context.window_manager.maximize_created and primitives.is_parametric(obj))
+
+
+class MAXIMIZE_PT_create_keyboard_entry(_CreateRollouts, Panel):
+    bl_label = "Keyboard Entry"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    def draw(self, _context):
+        self.layout.operator("maximize.keyboard_entry", icon='KEYINGSET')
+
+
+class MAXIMIZE_PT_create_parameters(_CreateRollouts, Panel):
+    bl_label = "Parameters"
+
+    def draw(self, context):
+        obj = context.active_object
+        primitives.draw_parameters(self.layout, obj)
+        if compound.is_blobmesh(obj):
+            compound.draw_blob_objects(self.layout, obj)
+
+
 # Parent panels that exist only in Moritz (or in every Blender, for Multires and Geometry Nodes).
 _MODIFIER_ROLLOUTS = (
     MAXIMIZE_PT_edit_poly_rollouts,
@@ -894,6 +931,8 @@ classes = (
     MAXIMIZE_MT_main,
     MAXIMIZE_OT_create_in_viewport,
     MAXIMIZE_PT_create,
+    MAXIMIZE_PT_create_keyboard_entry,
+    MAXIMIZE_PT_create_parameters,
     MAXIMIZE_PT_modify,
     MAXIMIZE_PT_utilities,
     MAXIMIZE_PT_selection_sets,
@@ -955,6 +994,8 @@ def register():
     # The same ID property the AutoGrid toggle (`maximize.autogrid`) flips.
     bpy.types.Scene.maximize_autogrid = BoolProperty(
         name="AutoGrid", description="Create objects on the surface under the mouse")
+    # The object the Create tab shows Parameters for: the last one created.
+    wm.maximize_created = StringProperty(options={'SKIP_SAVE'})
     wm.maximize_start_new_shape = BoolProperty(
         name="Start New Shape", default=True,
         description="Off: new lines are added as splines to the selected shape")
@@ -972,6 +1013,7 @@ def unregister():
     if getattr(getattr(bpy.types, "PROPERTIES_PT_utilities", None), "utilities_draw", None) is draw_utilities:
         bpy.types.PROPERTIES_PT_utilities.utilities_draw = None
     del bpy.types.WindowManager.maximize_start_new_shape
+    del bpy.types.WindowManager.maximize_created
     del bpy.types.Scene.maximize_autogrid
     if getattr(bpy.types.VIEW3D_HT_header, "select_mode_draw", None) is draw_levels:
         bpy.types.VIEW3D_HT_header.select_mode_draw = None
