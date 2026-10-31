@@ -133,8 +133,10 @@ def _in_extrusion(footprint, offset, skin, point):
 
 
 def _cap_plane(faces, offset):
+    """The plane the moved polygons end up in: moved by `offset`, still facing their own way (a
+    move off the normal, along a gizmo arrow or in a plane, doesn't turn them)."""
     center = sum((f.calc_center_median() for f in faces), Vector()) / len(faces)
-    return center + offset, offset.normalized()
+    return center + offset, _direction(faces)
 
 
 def _on_segment(point, a, b, tolerance):

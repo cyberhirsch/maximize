@@ -94,6 +94,21 @@ def s_edit():
         P['axis'] = axis
         co = c2 + screen_dir(axis).normalized() * 55 * bpy.context.preferences.system.ui_scale
         say("arrow", tuple(axis), "normal . axis", round(abs(axis.dot(P['normal'])), 3))
+    elif GIZMO == 'PLANE':
+        # The plane handle of the two Global axes across the view: a small square on their
+        # diagonal, 0.8 gizmo units out (Blender's MAN_AXIS_SCALE_PLANE_SCALE 0.7 + 0.1).
+        view = rv3d.view_rotation @ Vector((0, 0, 1))
+        axes = [Vector(a) for a in ((1, 0, 0), (0, 1, 0), (0, 0, 1))]
+        normal_axis = max(axes, key=lambda a: abs(a.dot(view)))
+        u, v = [a for a in axes if a is not normal_axis]
+        # World units per gizmo unit at the center (the gizmo keeps its size on screen).
+        right = rv3d.view_rotation @ Vector((1, 0, 0))
+        ppu = (view3d_utils.location_3d_to_region_2d(r, rv3d, center + right) - c2).length
+        unit = bpy.context.preferences.view.gizmo_size * bpy.context.preferences.system.ui_scale / ppu
+        point = center + (u + v).normalized() * 0.8 * unit
+        co = view3d_utils.location_3d_to_region_2d(r, rv3d, point)
+        P['plane_normal'] = normal_axis
+        say("plane across", tuple(normal_axis))
     elif GIZMO == 'RING':
         co = c2
     else:
@@ -140,6 +155,21 @@ def s_check():
         d = moved.normalized()
         check("along the arrow, not the normal", len(cap) > 0 and abs(d.dot(P['axis'])) > 0.99,
               "dir . axis", round(abs(d.dot(P['axis'])), 3), "dir . normal", round(abs(d.dot(P['normal'])), 3))
+    if 'plane_normal' in P:
+        obj = bpy.context.active_object
+        bm = bmesh.from_edit_mesh(obj.data)
+        cap = [obj.matrix_world @ f.calc_center_median() for f in bm.faces if f.select]
+        moved = (sum(cap, P['center'] * 0) / max(len(cap), 1)) - P['center']
+        across = abs(moved.dot(P['plane_normal']))
+        in_plane = (moved - P['plane_normal'] * moved.dot(P['plane_normal']))
+        check("in the handle's plane, on both of its axes", len(cap) > 0 and across < 1e-4 and
+              min(abs(c) for i, c in enumerate(in_plane) if P['plane_normal'][i] == 0) > 1e-3,
+              "moved", tuple(round(c, 3) for c in moved))
+        # Not held to the handle's diagonal (what treating it as an arrow did).
+        from mathutils import Vector
+        diagonal = Vector([0.0 if c else 1.0 for c in P['plane_normal']]).normalized()
+        check("a free move in the plane, not along the handle", abs(moved.normalized().dot(diagonal)) < 0.999,
+              round(abs(moved.normalized().dot(diagonal)), 4))
     with bpy.context.temp_override(window=win(), area=area(), region=region()):
         bpy.ops.ed.undo()
     check("one undo takes it away", counts() == P['before'], counts())

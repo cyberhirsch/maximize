@@ -660,7 +660,9 @@ def gizmo_arrow_move(context):
     if group is None or group.bl_idname != "VIEW3D_GGT_xform_gizmo":
         return False
     arrow = next((g for g in group.gizmos if g.is_highlight and g.bl_idname == "GIZMO_GT_arrow_3d"), None)
-    if arrow is None:
+    # The plane handles (XY, YZ, ZX) are arrows too, drawn as planes: they keep the gizmo's own
+    # move in their plane (Blender's Shift flip only changes the single-axis arrows).
+    if arrow is None or arrow.draw_style != 'NORMAL':
         return False
     # The arrow points along Z of its offset, in the orientation of its basis.
     direction = (arrow.matrix_basis @ arrow.matrix_offset).col[2].xyz
