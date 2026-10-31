@@ -18,6 +18,9 @@ from bpy_extras import view3d_utils  # noqa: E402
 from maximize.keymaps import activate  # noqa: E402
 
 KEYMAP = os.environ.get("MX_KEYMAP", "Moritz")
+# MX_TOOL=rotate / scale: Shift+drag with the Rotate or Scale tool (Seb: "smart extrude should also
+# work in scale and rotate").
+TOOL = os.environ.get("MX_TOOL", "move")
 GIZMO = {"1": "ARROW"}.get(os.environ.get("MX_GIZMO", ""), os.environ.get("MX_GIZMO", ""))
 failures = []
 
@@ -26,7 +29,7 @@ def say(*a): print("MXSE", " ".join(str(x) for x in a), flush=True)
 
 
 def check(name, ok, *info):
-    say("OK" if ok else "FAIL", KEYMAP + (" " + GIZMO.lower() if GIZMO else "") + ":", name, *info)
+    say("OK" if ok else "FAIL", KEYMAP + " " + TOOL + (" " + GIZMO.lower() if GIZMO else "") + ":", name, *info)
     if not ok:
         failures.append(name)
 
@@ -68,7 +71,7 @@ def s_edit():
         bpy.ops.object.mode_set(mode='EDIT')
         bpy.context.tool_settings.mesh_select_mode = (False, False, True)
         bpy.ops.mesh.select_all(action='DESELECT')
-        bpy.ops.wm.tool_set_by_id(name="builtin.move")
+        bpy.ops.wm.tool_set_by_id(name="builtin." + TOOL)
         if os.environ.get("MX_NO_EDIT_STEP") != "1":
             # Tab makes an undo step on entering Edit Mode; the script call above does not.
             bpy.ops.ed.undo_push(message="Toggle Edit Mode")
@@ -83,6 +86,7 @@ def s_edit():
     center = obj.matrix_world @ face.calc_center_median()
     P['center'] = center
     P['normal'] = (normal_world @ face.normal).normalized()
+    P['area'] = face.calc_area()
     c2 = view3d_utils.location_3d_to_region_2d(r, rv3d, center)
     if GIZMO == 'ARROW':
         # The Global arrow nearest the face normal (but off it), long enough on screen to grab.
@@ -147,6 +151,18 @@ def s_check():
     after = counts()
     check("the extrusion stays after the release", after != P['before'] and after[1] > P['before'][1],
           P['before'], "->", after)
+    if TOOL != "move":
+        obj = bpy.context.active_object
+        bm = bmesh.from_edit_mesh(obj.data)
+        cap = [f for f in bm.faces if f.select]
+        normal = sum(((obj.matrix_world.to_3x3() @ f.normal) for f in cap), P['center'] * 0).normalized()
+        cap_area = sum(f.calc_area() for f in cap)
+        if TOOL == "rotate":
+            check("the cap is turned", len(cap) > 0 and normal.dot(P['normal']) < 0.999,
+                  "normal . before", round(normal.dot(P['normal']), 4))
+        else:
+            check("the cap is scaled", len(cap) > 0 and abs(cap_area - P['area']) > 1e-3 * P['area'],
+                  "area", round(P['area'], 4), "->", round(cap_area, 4))
     if 'axis' in P:
         obj = bpy.context.active_object
         bm = bmesh.from_edit_mesh(obj.data)
