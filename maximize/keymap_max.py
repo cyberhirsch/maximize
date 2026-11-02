@@ -86,6 +86,12 @@ def apply(km, moritz=False, maya_navigation=False):
     km.remove("3D View", "view3d.rotate", _event('LEFTMOUSE', alt=True))
     km.remove("3D View", "view3d.zoom", _event('RIGHTMOUSE', alt=True))
     km.view("view3d.move", _event('MIDDLEMOUSE'))
+    # The same pan, and holding it with W A S D (Q E) flies, the wheel setting the speed (Unreal).
+    km.view("maximize.view_fly", _event('MIDDLEMOUSE'))
+    # It starts the pan from its own invoke, so the pan doesn't know the button: releasing it ends
+    # the pan here.
+    if km.available("maximize.view_fly", {}) and "View3D Move Modal" in km.items:
+        km.items["View3D Move Modal"].append(("CONFIRM", _event('MIDDLEMOUSE', 'RELEASE', any=True), None))
     # Industry Compatible copies the active tool's left-drag to the middle mouse (Maya), and tool
     # keymaps come first: the middle mouse would move the selection instead of panning. Max always
     # pans with it.

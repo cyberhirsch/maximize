@@ -106,6 +106,180 @@ def _snapshot(value):
     return value.copy() if hasattr(value, "copy") else value
 
 
+# Fly keys (as in Unreal): along the view, and Q / E down and up along the world's Z.
+_FLY_KEYS = {
+    'W': (0.0, 0.0, -1.0), 'S': (0.0, 0.0, 1.0), 'A': (-1.0, 0.0, 0.0), 'D': (1.0, 0.0, 0.0),
+    'Q': None, 'E': None,
+}
+_FLY_LOOK = 0.0035  # Radians per pixel at Walk Navigation's mouse sensitivity 1.
+
+
+class MAXIMIZE_OT_view_fly(Operator):
+    """Pan the view; with W A S D (Q E down and up) pressed while the button is held, fly through
+    the scene, looking with the mouse. The wheel sets the speed (Walk Navigation's)"""
+    bl_idname = "maximize.view_fly"
+    bl_label = "Pan / Fly"
+    bl_options = {'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.region_data is not None and context.area is not None and context.area.type == 'VIEW_3D'
+
+    def invoke(self, context, event):
+        # The pan runs as before (Blender's, with its camera and lock handling) until a fly key is
+        # pressed. This operator's handler is added after it, so it sees the keys first.
+        bpy.ops.view3d.move('INVOKE_DEFAULT')
+        self._button = event.type
+        self._held = set()
+        self._flying = False
+        self._camera = None
+        self._timer = None
+        self._time = None
+        context.window_manager.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
+
+    def _start(self, context, event):
+        import time
+        rv3d = context.region_data
+        if rv3d.lock_rotation:
+            return False
+        self._flying = True
+        if rv3d.view_perspective == 'CAMERA' and context.scene.camera is not None:
+            # As Walk Navigation: through a camera, the camera flies.
+            self._camera = context.scene.camera
+            self._camera_start = self._camera.matrix_world.copy()
+        elif rv3d.view_perspective == 'ORTHO':
+            rv3d.view_perspective = 'PERSP'
+        self._origin = (event.mouse_x, event.mouse_y)
+        self._last = self._origin
+        self._time = time.perf_counter()
+        self._timer = context.window_manager.event_timer_add(1.0 / 60.0, window=context.window)
+        context.window.cursor_modal_set('NONE')
+        self._show_speed(context)
+        return True
+
+    def _eye(self, context):
+        """The viewer's rotation (a 3x3 matrix) and position."""
+        from mathutils import Vector
+        if self._camera is not None:
+            m = self._camera.matrix_world
+            return m.to_quaternion().to_matrix(), m.translation.copy()
+        rv3d = context.region_data
+        rot = rv3d.view_rotation.to_matrix()
+        return rot, rv3d.view_location + rot @ Vector((0.0, 0.0, rv3d.view_distance))
+
+    def _set_eye(self, context, rot, eye):
+        from mathutils import Matrix, Vector
+        if self._camera is not None:
+            scale = self._camera.matrix_world.to_scale()
+            m = Matrix.Translation(eye) @ rot.to_4x4() @ Matrix.Diagonal(scale.to_4d())
+            if self._camera.parent is not None:
+                m = self._camera.parent.matrix_world.inverted() @ m
+                self._camera.matrix_basis = self._camera.matrix_parent_inverse.inverted() @ m
+            else:
+                self._camera.matrix_world = m
+            return
+        rv3d = context.region_data
+        rv3d.view_rotation = rot.to_quaternion()
+        rv3d.view_location = eye - rot @ Vector((0.0, 0.0, rv3d.view_distance))
+
+    def _look(self, context, dx, dy):
+        from mathutils import Matrix, Vector
+        walk = context.preferences.inputs.walk_navigation
+        k = _FLY_LOOK * walk.mouse_speed
+        if walk.use_mouse_reverse:
+            dy = -dy
+        rot, eye = self._eye(context)
+        turned = Matrix.Rotation(-dx * k, 3, 'Z') @ rot
+        pitched = turned @ Matrix.Rotation(dy * k, 3, 'X')
+        # Not over the top: the view's up stays above the horizon.
+        if (pitched @ Vector((0.0, 1.0, 0.0))).z > 0.01:
+            turned = pitched
+        self._set_eye(context, turned, eye)
+
+    def _move(self, context, event):
+        import time
+        from mathutils import Vector
+        now = time.perf_counter()
+        dt, self._time = min(now - self._time, 0.1), now
+        rot, eye = self._eye(context)
+        step = Vector()
+        for key in self._held:
+            if key == 'Q':
+                step.z -= 1.0
+            elif key == 'E':
+                step.z += 1.0
+            else:
+                step += rot @ Vector(_FLY_KEYS[key])
+        if step.length == 0.0:
+            return
+        walk = context.preferences.inputs.walk_navigation
+        speed = walk.walk_speed / max(context.scene.unit_settings.scale_length, 1e-6)
+        if event.shift:
+            speed *= walk.walk_speed_factor
+        self._set_eye(context, rot, eye + step.normalized() * speed * dt)
+
+    def _show_speed(self, context):
+        if self._flying:
+            context.area.header_text_set(
+                "Fly: W A S D, Q E down / up, Shift faster, wheel speed {:.2f} m/s".format(
+                    context.preferences.inputs.walk_navigation.walk_speed))
+
+    def _finish(self, context, cancel=False):
+        if self._timer is not None:
+            context.window_manager.event_timer_remove(self._timer)
+        if self._flying:
+            context.window.cursor_modal_restore()
+            context.window.cursor_warp(*self._origin)
+            context.area.header_text_set(None)
+        if self._camera is not None:
+            if cancel:
+                self._camera.matrix_world = self._camera_start
+            elif not (context.space_data.lock_camera and context.mode in {'OBJECT', 'POSE'}):
+                # One undo step for the camera's new place (with Camera to View on, the pan
+                # underneath makes it).
+                return {'FINISHED', 'PASS_THROUGH'}
+        return {'CANCELLED', 'PASS_THROUGH'}
+
+    def modal(self, context, event):
+        if event.type == self._button and event.value == 'RELEASE':
+            # The pan underneath ends on the same release.
+            return self._finish(context)
+        if event.type in {'ESC', 'RIGHTMOUSE'} and event.value == 'PRESS':
+            # The pan cancels too, putting the view back as it was.
+            return self._finish(context, cancel=True)
+        if event.type in _FLY_KEYS:
+            if event.value == 'PRESS':
+                if not self._flying and not self._start(context, event):
+                    return {'RUNNING_MODAL'}
+                self._held.add(event.type)
+            elif event.value == 'RELEASE':
+                self._held.discard(event.type)
+            return {'RUNNING_MODAL'}
+        if event.type in {'WHEELUPMOUSE', 'WHEELDOWNMOUSE'}:
+            walk = context.preferences.inputs.walk_navigation
+            walk.walk_speed = min(max(walk.walk_speed * (1.25 if event.type == 'WHEELUPMOUSE' else 0.8), 0.01), 100.0)
+            context.preferences.is_dirty = True
+            self._show_speed(context)
+            return {'RUNNING_MODAL'}
+        if not self._flying:
+            return {'PASS_THROUGH'}
+        if event.type == 'MOUSEMOVE':
+            dx, dy = event.mouse_x - self._last[0], event.mouse_y - self._last[1]
+            self._last = (event.mouse_x, event.mouse_y)
+            if dx or dy:
+                self._look(context, dx, dy)
+                # Keep the hidden cursor near where it started, so the look never runs out of screen.
+                if abs(event.mouse_x - self._origin[0]) + abs(event.mouse_y - self._origin[1]) > 100:
+                    context.window.cursor_warp(*self._origin)
+                    self._last = self._origin
+            return {'RUNNING_MODAL'}
+        if event.type == 'TIMER':
+            self._move(context, event)
+            return {'RUNNING_MODAL'}
+        return {'RUNNING_MODAL'}
+
+
 class MAXIMIZE_OT_camera_from_view(Operator):
     """Create a camera that matches the current view and look through it (Ctrl+C)"""
     bl_idname = "maximize.camera_from_view"
@@ -364,6 +538,7 @@ classes = (
     MAXIMIZE_OT_view_projection,
     MAXIMIZE_OT_space_key,
     MAXIMIZE_OT_viewport_maximize,
+    MAXIMIZE_OT_view_fly,
     MAXIMIZE_OT_camera_from_view,
     MAXIMIZE_OT_open_editor,
     MAXIMIZE_OT_material_editor,
