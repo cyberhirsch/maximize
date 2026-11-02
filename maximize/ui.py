@@ -12,7 +12,7 @@ import bpy.utils.previews
 from bpy.props import BoolProperty, StringProperty
 from bpy.types import Menu, Operator, Panel
 
-from . import compound, primitives, uvw_map, vocabulary
+from . import compound, lights, primitives, uvw_map, vocabulary
 from .shapes import EXTENDED_SPLINES, SPLINES
 from .nodes import draw_modifier_inputs
 from .preferences import draw_keymap_switch
@@ -244,7 +244,7 @@ class MAXIMIZE_OT_create_in_viewport(Operator):
         region = next(region for region in area.regions if region.type == 'WINDOW')
         module, name = self.operator.split(".")
         op = getattr(getattr(bpy.ops, module), name)
-        props = {"kind": self.kind} if self.kind else {}
+        props = {("shape" if self.operator == "maximize.add_light" else "kind"): self.kind} if self.kind else {}
         if self.plus:
             props["plus"] = True
         with context.temp_override(area=area, region=region):
@@ -269,7 +269,10 @@ def _create_button(layout, operator, text, icon, kind="", plus=False):
 # The categories Maximize fills. Max's sub-categories (Standard / Extended Primitives, Compound
 # Objects; Splines / Extended Splines) are not chosen from a dropdown: the Command Panel has room
 # for all of them at once (Seb), in Max's order with a gap between the groups.
-CATEGORIES = {'GEOMETRY', 'SHAPES'}
+CATEGORIES = {'GEOMETRY', 'SHAPES', 'LIGHTS'}
+
+# Blender's other lights, below the drag-created ones: (type, label, icon).
+_BLENDER_LIGHTS = (('POINT', "Point", 'LIGHT_POINT'), ('SPOT', "Spot", 'LIGHT_SPOT'), ('SUN', "Sun", 'LIGHT_SUN'))
 
 
 def _kind_buttons(grid, kinds):
@@ -295,6 +298,20 @@ def draw_object_types(layout, context, category):
     def group():
         return col.grid_flow(row_major=True, columns=2, even_columns=True, align=True)
 
+    if category == 'LIGHTS':
+        # Dragged out like V-Ray's lights, then Blender's (placed at the 3D cursor).
+        grid = group()
+        for ident, label, _desc, icon in lights.SHAPES:
+            op = grid.operator("maximize.create_in_viewport", text=label, icon=icon)
+            op.operator = "maximize.add_light"
+            op.kind = ident
+        col.separator(factor=0.5)
+        grid = group()
+        grid.operator_context = 'INVOKE_REGION_WIN'
+        for ident, label, icon in _BLENDER_LIGHTS:
+            grid.operator("object.light_add", text=label, icon=icon).type = ident
+        grid.operator("object.lightprobe_add", text="Light Probe", icon='LIGHTPROBE_SPHERE').type = 'SPHERE'
+        return True
     if category == 'GEOMETRY':
         grid = group()
         for ident in primitives.STANDARD_PRIMITIVES:
@@ -821,12 +838,17 @@ class _CreateRollouts:
     def poll(cls, context):
         obj = context.active_object
         return (has_command_panel() and context.mode == 'OBJECT' and obj is not None and
-                obj.name == context.window_manager.maximize_created and primitives.is_parametric(obj))
+                obj.name == context.window_manager.maximize_created and
+                (primitives.is_parametric(obj) or lights.light_shape(obj) is not None))
 
 
 class MAXIMIZE_PT_create_keyboard_entry(_CreateRollouts, Panel):
     bl_label = "Keyboard Entry"
     bl_options = {'DEFAULT_CLOSED'}
+
+    @classmethod
+    def poll(cls, context):
+        return super().poll(context) and primitives.is_parametric(context.active_object)
 
     def draw(self, _context):
         self.layout.operator("maximize.keyboard_entry", icon='KEYINGSET')
@@ -837,6 +859,9 @@ class MAXIMIZE_PT_create_parameters(_CreateRollouts, Panel):
 
     def draw(self, context):
         obj = context.active_object
+        if lights.light_shape(obj) is not None:
+            lights.draw_parameters(self.layout, obj)
+            return
         primitives.draw_parameters(self.layout, obj)
         if compound.is_blobmesh(obj):
             compound.draw_blob_objects(self.layout, obj)

@@ -368,7 +368,7 @@ def _grid_plane(rv3d):
 def autogrid_hit(context, region, mouse):
     """Max's AutoGrid: (point, u, v, normal) of the surface under the mouse when AutoGrid is on,
     else None."""
-    if not context.scene.get("maximize_autogrid"):
+    if not getattr(context.scene, "maximize_autogrid", False):
         return None
     rv3d = region.data
     origin = view3d_utils.region_2d_to_origin_3d(region, rv3d, mouse)
@@ -391,8 +391,11 @@ class MAXIMIZE_OT_autogrid(Operator):
     bl_options = {'REGISTER'}
 
     def execute(self, context):
-        context.scene["maximize_autogrid"] = not context.scene.get("maximize_autogrid", False)
-        self.report({'INFO'}, "AutoGrid " + ("on" if context.scene["maximize_autogrid"] else "off"))
+        # The Create tab's AutoGrid checkbox: one property (an item set with scene["..."] is a
+        # different value since Blender 5.0).
+        scene = context.scene
+        scene.maximize_autogrid = not scene.maximize_autogrid
+        self.report({'INFO'}, "AutoGrid " + ("on" if scene.maximize_autogrid else "off"))
         return {'FINISHED'}
 
 
@@ -865,7 +868,7 @@ class MAXIMIZE_MT_create(bpy.types.Menu):
 def _draw_create_options(layout):
     layout.separator()
     layout.operator("maximize.keyboard_entry", icon='KEYINGSET')
-    layout.operator("maximize.autogrid", icon='CHECKBOX_HLT' if bpy.context.scene.get("maximize_autogrid")
+    layout.operator("maximize.autogrid", icon='CHECKBOX_HLT' if getattr(bpy.context.scene, "maximize_autogrid", False)
                     else 'CHECKBOX_DEHLT')
 
 
