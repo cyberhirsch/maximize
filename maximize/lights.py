@@ -17,7 +17,7 @@ from bpy_extras import view3d_utils
 from mathutils import Matrix, Vector
 from mathutils.geometry import intersect_line_plane
 
-from . import primitives
+from . import primitives, tool_state
 
 # (identifier, label, description, icon)
 SHAPES = (
@@ -98,7 +98,7 @@ class MAXIMIZE_OT_add_light(Operator):
         self._region = None
         self._created = 0
         context.window_manager.modal_handler_add(self)
-        context.window.cursor_modal_set('CROSSHAIR')
+        tool_state.begin(context)
         self._status(context)
         return {'RUNNING_MODAL'}
 
@@ -164,7 +164,7 @@ class MAXIMIZE_OT_add_light(Operator):
 
     def _end(self, context):
         context.workspace.status_text_set(None)
-        context.window.cursor_modal_restore()
+        tool_state.end(context)
         return {'FINISHED'} if self._created else {'CANCELLED'}
 
     def modal(self, context, event):

@@ -22,6 +22,7 @@ from mathutils.geometry import intersect_line_plane
 from . import compound
 from . import primitives_ext as ext
 from . import quad_caps as qc
+from . import tool_state
 from .nodes import GroupBuilder, draw_modifier_inputs, find_group, modifier_input
 from .shapes import (
     SHAPE_KINDS, SHAPE_STEPS, SHAPES, create_shape, draw_shape_parameters, shape_input, shape_kind,
@@ -427,7 +428,7 @@ class MAXIMIZE_OT_add_primitive(Operator):
         self._region = None
         self._created = 0
         context.window_manager.modal_handler_add(self)
-        context.window.cursor_modal_set('CROSSHAIR')
+        tool_state.begin(context)
         self._status(context)
         return {'RUNNING_MODAL'}
 
@@ -559,7 +560,7 @@ class MAXIMIZE_OT_add_primitive(Operator):
 
     def _end(self, context):
         context.workspace.status_text_set(None)
-        context.window.cursor_modal_restore()
+        tool_state.end(context)
         return {'FINISHED'} if self._created else {'CANCELLED'}
 
     def modal(self, context, event):
@@ -605,14 +606,14 @@ class _ClickCreate:
             return self.execute(context)
         self._created = 0
         context.window_manager.modal_handler_add(self)
-        context.window.cursor_modal_set('CROSSHAIR')
+        tool_state.begin(context)
         context.workspace.status_text_set("Create {:s}: click in a viewport (right-click or Esc to stop)".format(
             self._label()))
         return {'RUNNING_MODAL'}
 
     def _end(self, context):
         context.workspace.status_text_set(None)
-        context.window.cursor_modal_restore()
+        tool_state.end(context)
         return {'FINISHED'} if self._created else {'CANCELLED'}
 
     def modal(self, context, event):
@@ -738,13 +739,13 @@ class MAXIMIZE_OT_add_suzanne(Operator):
         self._obj = None
         self._created = 0
         context.window_manager.modal_handler_add(self)
-        context.window.cursor_modal_set('CROSSHAIR')
+        tool_state.begin(context)
         context.workspace.status_text_set("Create Suzanne: drag the size in a viewport (right-click or Esc to stop)")
         return {'RUNNING_MODAL'}
 
     def _end(self, context):
         context.workspace.status_text_set(None)
-        context.window.cursor_modal_restore()
+        tool_state.end(context)
         return {'FINISHED'} if self._created else {'CANCELLED'}
 
     def _hit(self, event):

@@ -27,6 +27,7 @@ from mathutils.bvhtree import BVHTree
 from mathutils.geometry import intersect_line_line_2d
 from mathutils.kdtree import KDTree
 
+from . import tool_state
 from .nodes import GroupBuilder, find_group, modifier_input
 
 MODIFIER_NAME = "Freeform"
@@ -672,6 +673,7 @@ class MAXIMIZE_OT_freeform_draw(Operator):
         self._state = ui_state(context)
         self._handle = bpy.types.SpaceView3D.draw_handler_add(self._draw, (), 'WINDOW', 'POST_PIXEL')
         context.window_manager.modal_handler_add(self)
+        tool_state.begin(context)
         self._header(context)
         return {'RUNNING_MODAL'}
 
@@ -710,6 +712,7 @@ class MAXIMIZE_OT_freeform_draw(Operator):
             build_branch(obj, self._points(screen), s.branch_taper)
 
     def _end(self, context):
+        tool_state.end(context)
         bpy.types.SpaceView3D.draw_handler_remove(self._handle, 'WINDOW')
         self._area.header_text_set(None)
         self._area.tag_redraw()
@@ -903,6 +906,7 @@ class MAXIMIZE_OT_freeform_conform_brush(Operator):
         self._state = ui_state(context)
         self._handle = bpy.types.SpaceView3D.draw_handler_add(self._draw, (), 'WINDOW', 'POST_PIXEL')
         context.window_manager.modal_handler_add(self)
+        tool_state.redraw()
         name = next(n for k, n, _d in CONFORM_BRUSHES if k == self.mode)
         action = "paint over the mesh" if self.mode in {'CONFORM', 'RELAX'} else "drag"
         context.area.header_text_set("{}: {}; [ ] brush size; right-click or Esc ends".format(name, action))
@@ -985,6 +989,7 @@ class MAXIMIZE_OT_freeform_conform_brush(Operator):
         return self._grab[1] if self._grab is not None else self._mouse
 
     def _end(self):
+        tool_state.redraw()
         bpy.types.SpaceView3D.draw_handler_remove(self._handle, 'WINDOW')
         self._area.header_text_set(None)
         self._area.tag_redraw()
@@ -1186,11 +1191,12 @@ def draw(layout, context, obj, mod):
                            ('OPTIMIZE', "Optimize")):
             grid.operator("maximize.freeform_tool", text=text, icon=mx_icon(_TOOL_ICONS[tool])).tool = tool
         for mode, text, _d in CONFORM_BRUSHES:
-            grid.operator("maximize.freeform_conform_brush", text=text,
-                          icon=mx_icon(_CONFORM_ICONS[mode])).mode = mode
+            grid.operator("maximize.freeform_conform_brush", text=text, icon=mx_icon(_CONFORM_ICONS[mode]),
+                          depress=tool_state.is_running("maximize.freeform_conform_brush", mode=mode)).mode = mode
         grid.operator("maximize.freeform_conform")
         for kind, text, _d in DRAW_KINDS:
-            grid.operator("maximize.freeform_draw", text=text, icon=mx_icon(_KIND_ICONS[kind])).kind = kind
+            grid.operator("maximize.freeform_draw", text=text, icon=mx_icon(_KIND_ICONS[kind]),
+                          depress=tool_state.is_running("maximize.freeform_draw", kind=kind)).kind = kind
         grid.pad()
         col = body.column(align=True)
         col.prop(s, "min_distance")

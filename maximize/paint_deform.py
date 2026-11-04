@@ -29,6 +29,7 @@ from gpu_extras.batch import batch_for_shader
 from mathutils import Matrix, Vector, kdtree
 from mathutils.noise import noise
 
+from . import tool_state
 from .freeform import brush_weights, outside, pixel_size, ui_state
 
 PAINT_BRUSHES = (
@@ -244,6 +245,7 @@ class MAXIMIZE_OT_paint_deform(Operator):
         self._state = ui_state(context)
         self._handle = bpy.types.SpaceView3D.draw_handler_add(self._draw, (), 'WINDOW', 'POST_PIXEL')
         context.window_manager.modal_handler_add(self)
+        tool_state.redraw()
         name = next(n for k, n, _d in PAINT_BRUSHES if k == self.mode)
         action = "drag" if self.mode in _DRAGS else "paint over the mesh"
         context.area.header_text_set("{}: {}; right-click or Enter commits, Esc cancels; [ ] brush size".format(
@@ -323,6 +325,7 @@ class MAXIMIZE_OT_paint_deform(Operator):
         self._mirrored(grabbed)
 
     def _end(self, cancel=False):
+        tool_state.redraw()
         bpy.types.SpaceView3D.draw_handler_remove(self._handle, 'WINDOW')
         self._area.header_text_set(None)
         self._area.tag_redraw()
@@ -403,7 +406,8 @@ def draw(layout, context):
     s = settings(context)
     grid = ToolGrid(layout)
     for mode, text, _d in PAINT_BRUSHES:
-        grid.operator("maximize.paint_deform", text=text, icon=mx_icon(_BRUSH_ICONS.get(mode, 'NONE'))).mode = mode
+        grid.operator("maximize.paint_deform", text=text, icon=mx_icon(_BRUSH_ICONS.get(mode, 'NONE')),
+                      depress=tool_state.is_running("maximize.paint_deform", mode=mode)).mode = mode
     grid.pad()
     row = layout.row(align=True)
     row.menu("MAXIMIZE_MT_paint_deform_presets", text=MAXIMIZE_MT_paint_deform_presets.bl_label)

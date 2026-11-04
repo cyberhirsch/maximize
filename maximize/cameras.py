@@ -20,6 +20,8 @@ from bpy_extras import view3d_utils
 from mathutils import Vector
 from mathutils.geometry import intersect_line_plane
 
+from . import tool_state
+
 # Max's default viewport field of view, 45 degrees, as a Blender viewport lens.
 VIEWPORT_LENS = 43.5
 VIEWPORT_CLIP_END = 100000.0
@@ -193,11 +195,13 @@ class MAXIMIZE_OT_target_camera(Operator):
         self._start = None
         self._cam = None
         context.window_manager.modal_handler_add(self)
+        tool_state.begin(context)
         context.workspace.status_text_set("Target Camera: press at the camera, drag to the target")
         return {'RUNNING_MODAL'}
 
     def modal(self, context, event):
         if event.type in {'RIGHTMOUSE', 'ESC'} and event.value == 'PRESS':
+            tool_state.end(context)
             context.workspace.status_text_set(None)
             return {'CANCELLED'} if self._cam is None else {'FINISHED'}
         if event.type == 'LEFTMOUSE' and event.value == 'PRESS' and self._start is None:
@@ -210,6 +214,7 @@ class MAXIMIZE_OT_target_camera(Operator):
                 self._goal.location = target
             return {'RUNNING_MODAL'}
         if event.type == 'LEFTMOUSE' and event.value == 'RELEASE' and self._cam is not None:
+            tool_state.end(context)
             context.workspace.status_text_set(None)
             return {'FINISHED'}
         return {'PASS_THROUGH'} if self._start is None else {'RUNNING_MODAL'}

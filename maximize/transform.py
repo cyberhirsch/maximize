@@ -13,6 +13,8 @@ from bpy.types import Operator
 from bpy_extras import view3d_utils
 from mathutils import Euler, Matrix, Vector
 
+from . import tool_state
+
 
 # ------------------------------------------------------------------------------
 # Transform Type-In (F12)
@@ -372,12 +374,12 @@ class MAXIMIZE_OT_align(Operator):
     def invoke(self, context, _event):
         context.window_manager.modal_handler_add(self)
         context.workspace.status_text_set("Align: pick the target object (Esc / Right-click to cancel)")
-        context.window.cursor_modal_set('EYEDROPPER')
+        tool_state.begin(context, 'EYEDROPPER')
         return {'RUNNING_MODAL'}
 
     def _finish(self, context):
         context.workspace.status_text_set(None)
-        context.window.cursor_modal_restore()
+        tool_state.end(context)
 
     def modal(self, context, event):
         if event.type in {'ESC', 'RIGHTMOUSE'} and event.value == 'PRESS':

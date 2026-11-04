@@ -20,6 +20,7 @@ from bpy.props import BoolProperty, EnumProperty, FloatProperty
 from bpy.types import Operator
 from mathutils import Matrix, Vector
 
+from . import tool_state
 from .spline_tools import (
     _PickSpline, _Point, _edit_curves, _insert, _read, _segment, _segment_count, _straight,
     _with_object_mode, _write,
@@ -140,11 +141,13 @@ class MAXIMIZE_OT_spline_insert(Operator):
 
     def invoke(self, context, _event):
         context.window_manager.modal_handler_add(self)
+        tool_state.begin(context)
         context.workspace.status_text_set("Insert: click on a segment, then move the new vertex")
         return {'RUNNING_MODAL'}
 
     def modal(self, context, event):
         if event.type in {'RIGHTMOUSE', 'ESC'} and event.value == 'PRESS':
+            tool_state.end(context)
             context.workspace.status_text_set(None)
             return {'CANCELLED'}
         if event.type == 'LEFTMOUSE' and event.value == 'PRESS':
@@ -164,6 +167,7 @@ class MAXIMIZE_OT_spline_insert(Operator):
                     p.select = False
                 _write(obj.data, spline, _insert(points, spline.use_cyclic_u, [u]))
             _with_object_mode(context, add)
+            tool_state.end(context)
             context.workspace.status_text_set(None)
             bpy.ops.transform.translate('INVOKE_DEFAULT')
             return {'FINISHED'}
@@ -1082,8 +1086,9 @@ def draw_geometry_extras(layout, context, obj):
     grid = ToolGrid(box)
     grid.operator("maximize.spline_create_line")
     grid.operator("maximize.spline_insert")
-    grid.operator("maximize.spline_refine")
-    grid.operator("maximize.spline_refine", text="Refine Connect").connect = True
+    grid.operator("maximize.spline_refine", depress=tool_state.is_running("maximize.spline_refine", connect=False))
+    grid.operator("maximize.spline_refine", text="Refine Connect",
+                  depress=tool_state.is_running("maximize.spline_refine", connect=True)).connect = True
     grid.operator("maximize.spline_cross_section")
     grid.operator("maximize.spline_attach_multiple")
     grid.operator("maximize.spline_hide", text="Hide").unhide_all = False

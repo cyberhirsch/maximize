@@ -12,7 +12,7 @@ import bpy.utils.previews
 from bpy.props import BoolProperty, StringProperty
 from bpy.types import Menu, Operator, Panel
 
-from . import compound, lights, primitives, uvw_map, vocabulary
+from . import compound, lights, primitives, tool_state, uvw_map, vocabulary
 from .shapes import EXTENDED_SPLINES, SPLINES
 from .nodes import draw_modifier_inputs
 from .preferences import draw_keymap_switch
@@ -253,17 +253,21 @@ class MAXIMIZE_OT_create_in_viewport(Operator):
 
 
 def _create_button(layout, operator, text, icon, kind="", plus=False):
+    props = {("shape" if operator == "maximize.add_light" else "kind"): kind} if kind else {}
+    if plus:
+        props["plus"] = True
+    depress = tool_state.is_running(operator, **props)
     if has_command_panel():
-        op = layout.operator("maximize.create_in_viewport", text=text, icon=icon)
+        op = layout.operator("maximize.create_in_viewport", text=text, icon=icon, depress=depress)
         op.operator = operator
         op.kind = kind
         op.plus = plus
     elif kind:
-        layout.operator(operator, text=text, icon=icon).kind = kind
+        layout.operator(operator, text=text, icon=icon, depress=depress).kind = kind
     elif plus:
-        layout.operator(operator, text=text, icon=icon).plus = True
+        layout.operator(operator, text=text, icon=icon, depress=depress).plus = True
     else:
-        layout.operator(operator, text=text, icon=icon)
+        layout.operator(operator, text=text, icon=icon, depress=depress)
 
 
 # The categories Maximize fills. Max's sub-categories (Standard / Extended Primitives, Compound
@@ -360,6 +364,11 @@ class ToolGrid:
 
     def __getattr__(self, name):
         return getattr(self._cell(), name)
+
+    def operator(self, operator, **kwargs):
+        """Lit while its tool runs. A button for one setting of a tool passes its own `depress`."""
+        kwargs.setdefault("depress", tool_state.is_running(operator))
+        return self._cell().operator(operator, **kwargs)
 
     def pad(self):
         while self._count % TOOL_COLUMNS:
@@ -883,7 +892,7 @@ def draw_utilities(layout, context):
     body = rollout(layout, "mx_util_align", "Align")
     if body:
         col = body.column(align=True)
-        col.operator("maximize.align", text="Align")
+        col.operator("maximize.align", text="Align", depress=tool_state.is_running("maximize.align"))
         col.operator("maximize.align_pivot_world")
         col.operator("maximize.center_pivot")
         col.operator("maximize.affect_pivot_only", depress=context.scene.tool_settings.use_transform_data_origin)

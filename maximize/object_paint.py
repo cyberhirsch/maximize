@@ -31,6 +31,8 @@ from bpy_extras import view3d_utils
 from gpu_extras.batch import batch_for_shader
 from mathutils import Euler, Matrix, Vector
 
+from . import tool_state
+
 PAINT_ON = (
     ('GRID', "Grid", "Paint on the grid: the ground, or in a Top / Front / Side view that view's plane"),
     ('SURFACE', "Surface", "Paint on any object under the brush"),
@@ -223,6 +225,7 @@ class MAXIMIZE_OT_object_paint(Operator):
         self._state = ui_state(context)
         self._handle = bpy.types.SpaceView3D.draw_handler_add(self._draw, (), 'WINDOW', 'POST_PIXEL')
         context.window_manager.modal_handler_add(self)
+        tool_state.redraw()
         context.area.header_text_set("Object Paint: drag to paint; right-click or Enter commits, Esc cancels")
         return {'RUNNING_MODAL'}
 
@@ -243,6 +246,7 @@ class MAXIMIZE_OT_object_paint(Operator):
             self._surface.skip.add(copy)
 
     def _end(self, context, cancel=False):
+        tool_state.redraw()
         bpy.types.SpaceView3D.draw_handler_remove(self._handle, 'WINDOW')
         self._area.header_text_set(None)
         self._area.tag_redraw()
@@ -385,7 +389,7 @@ def draw(layout, context):
     layout.operator("maximize.object_paint_pick", icon='ADD')
     row = layout.row(align=True)
     row.scale_y = 1.4
-    row.operator("maximize.object_paint", icon='BRUSH_DATA')
+    row.operator("maximize.object_paint", icon='BRUSH_DATA', depress=tool_state.is_running("maximize.object_paint"))
     row = layout.row(align=True)
     row.operator("maximize.object_paint_fill")
     row.prop(s, "fill_count")

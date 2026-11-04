@@ -23,6 +23,8 @@ from bpy.types import GizmoGroup, Operator, Panel
 from bpy_extras import view3d_utils
 from mathutils import Euler, Matrix, Quaternion, Vector, geometry
 
+from . import tool_state
+
 
 def _edit_meshes(context):
     return [o for o in context.objects_in_mode_unique_data if o.type == 'MESH']
@@ -503,10 +505,12 @@ class _PickEdgeOperator:
     def invoke(self, context, event):
         context.workspace.status_text_set(self.hint + " (Esc / right-click: done)")
         context.window_manager.modal_handler_add(self)
+        tool_state.begin(context)
         return {'RUNNING_MODAL'}
 
     def modal(self, context, event):
         if event.type in {'ESC', 'RIGHTMOUSE'} and event.value == 'PRESS':
+            tool_state.end(context)
             context.workspace.status_text_set(None)
             return {'FINISHED'} if self.picked else {'CANCELLED'}
         if event.type == 'LEFTMOUSE' and event.value == 'PRESS':
@@ -518,6 +522,7 @@ class _PickEdgeOperator:
                 bmesh.update_edit_mesh(obj.data)
                 self.picked = True
                 if self.once:
+                    tool_state.end(context)
                     context.workspace.status_text_set(None)
                     return {'FINISHED'}
             return {'RUNNING_MODAL'}

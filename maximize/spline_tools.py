@@ -18,6 +18,7 @@ from bpy_extras import view3d_utils
 from mathutils import Vector
 from mathutils.geometry import intersect_line_plane
 
+from . import tool_state
 from .nodes import GroupBuilder, find_group, modifier_input
 
 
@@ -476,6 +477,7 @@ class MAXIMIZE_OT_line(Operator):
         self._drag = None
         self._region = None
         context.window_manager.modal_handler_add(self)
+        tool_state.begin(context)
         context.workspace.status_text_set("Line: click for corners, drag for curves, click the first point "
                                           "to close; right-click or Esc to finish")
         return {'RUNNING_MODAL'}
@@ -547,6 +549,7 @@ class MAXIMIZE_OT_line(Operator):
         return curve.splines[0]
 
     def _finish(self, context, close=False):
+        tool_state.end(context)
         context.workspace.status_text_set(None)
         if len(self._points) < 2:
             if self._target is not None:
@@ -981,6 +984,7 @@ class _PickSpline:
 
     def invoke(self, context, _event):
         context.window_manager.modal_handler_add(self)
+        tool_state.begin(context)
         context.workspace.status_text_set(self.status)
         return {'RUNNING_MODAL'}
 
@@ -1009,6 +1013,7 @@ class _PickSpline:
 
     def modal(self, context, event):
         if event.type in {'RIGHTMOUSE', 'ESC'} and event.value == 'PRESS':
+            tool_state.end(context)
             context.workspace.status_text_set(None)
             return {'FINISHED'}
         if event.type == 'LEFTMOUSE' and event.value == 'PRESS':
