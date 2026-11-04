@@ -1,17 +1,21 @@
 # SPDX-FileCopyrightText: 2026 Moritz Authors
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Max's Scene Explorer in Blender's Outliner: the type filter row in the header, double-click
-selects an object and its children, Unhide All / Unfreeze All.
+"""Max's Scene Explorer in Blender's Outliner: the type filters in a strip on the left (a row in
+the header without Moritz), double-click selects an object and its children, Unhide All /
+Unfreeze All.
 
 Nothing new is stored: the filters are the Outliner's own (Moritz adds Shapes), hiding and freezing
 are Blender's hide_viewport / hide_select.
 """
 
 import bpy
-from bpy.types import Operator
+from bpy.types import Operator, Panel
 
-# Max's Scene Explorer toolbar, left to right: Geometry, Shapes, Lights, Cameras, Helpers, Bones.
+# True once the panel is registered: only Moritz's Outliner has the strip for it.
+_has_type_bar = False
+
+# Max's Scene Explorer toolbar, in order: Geometry, Shapes, Lights, Cameras, Helpers, Bones.
 _TYPE_FILTERS = (
     ("use_filter_object_mesh", 'MESH_DATA', "Geometry"),
     ("use_filter_object_shapes", 'CURVE_DATA', "Shapes"),
@@ -24,14 +28,35 @@ _TYPE_FILTERS = (
 
 
 def draw_type_filters(self, context):
+    """The row in the header, for Blender builds without the Outliner's strip."""
     space = context.space_data
-    if space.display_mode not in {'VIEW_LAYER', 'SCENES'}:
+    if _has_type_bar or space.display_mode not in {'VIEW_LAYER', 'SCENES'}:
         return
     row = self.layout.row(align=True)
     row.active = space.use_filter_object
     for prop, icon, _name in _TYPE_FILTERS:
         if hasattr(space, prop):
             row.prop(space, prop, text="", icon=icon)
+
+
+class MAXIMIZE_PT_outliner_type_bar(Panel):
+    """Max's Scene Explorer display toolbar: the type filters one above the other on the left."""
+    bl_space_type = 'OUTLINER'
+    bl_region_type = 'NAVIGATION_BAR'
+    bl_label = "Display"
+    bl_options = {'HIDE_HEADER'}
+
+    def draw(self, context):
+        space = context.space_data
+        col = self.layout.column(align=True)
+        # The strip's layout has no width of its own: without one the buttons get none.
+        col.ui_units_x = 1.4
+        col.scale_y = 1.4
+        col.enabled = space.display_mode in {'VIEW_LAYER', 'SCENES'}
+        col.active = space.use_filter_object
+        for prop, icon, _name in _TYPE_FILTERS:
+            if hasattr(space, prop):
+                col.prop(space, prop, text="", icon=icon)
 
 
 def _descendants(obj):
@@ -139,8 +164,14 @@ _MENUS = ("OUTLINER_MT_context_menu", "OUTLINER_MT_object", "OUTLINER_MT_collect
 
 
 def register():
+    global _has_type_bar
     for cls in classes:
         bpy.utils.register_class(cls)
+    try:
+        bpy.utils.register_class(MAXIMIZE_PT_outliner_type_bar)
+        _has_type_bar = True
+    except RuntimeError:
+        _has_type_bar = False
     bpy.types.OUTLINER_HT_header.append(draw_type_filters)
     for name in _MENUS:
         menu = getattr(bpy.types, name, None)
@@ -154,5 +185,7 @@ def unregister():
         if menu is not None:
             menu.remove(draw_context_extras)
     bpy.types.OUTLINER_HT_header.remove(draw_type_filters)
+    if _has_type_bar:
+        bpy.utils.unregister_class(MAXIMIZE_PT_outliner_type_bar)
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
