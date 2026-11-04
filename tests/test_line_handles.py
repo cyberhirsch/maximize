@@ -1,6 +1,6 @@
 # Run: moritz.exe --factory-startup --enable-event-simulate --python tests/test_line_handles.py
-# Line: a dragged vertex shows both handles and the preview curves toward the mouse; a plain click
-# placed after it gives a straight segment; a second drag curves the segment between the two.
+# Line: a dragged vertex shows both handles while the segment to the mouse stays straight; a plain
+# click placed after it stays straight too; a second drag curves the segment between the two.
 import os
 import sys
 
@@ -15,13 +15,13 @@ from maximize import spline_tools
 failures = []
 SHOT = os.environ.get("MX_SHOT")
 drawn = []
-curves_out = []
+shows_out = []
 real_draw = spline_tools.MAXIMIZE_OT_line._draw
 
 
 def counted_draw(self):
     drawn.append(len(self._shown))
-    curves_out[:] = [self._curves_out(self._shown, index) for index in range(len(self._shown))]
+    shows_out[:] = [self._shows_out(self._shown, index) for index in range(len(self._shown))]
     real_draw(self)
 
 
@@ -72,18 +72,18 @@ def steps():
     yield
     mouse('LEFTMOUSE', 'RELEASE', A2)
     yield
-    # Toward the next point: the preview curves.
+    # Toward the next point: the preview runs straight, the handles stay visible.
     mouse('MOUSEMOVE', 'NOTHING', B)
     yield
     yield
     p = points()
     check("two points in the preview", len(p) == 2, len(p))
-    check("the preview curves toward the mouse", (p[0].handle_right - p[0].co).length > 0.01,
+    check("the segment to the mouse stays straight", (p[0].handle_right - p[0].co).length < 1e-6,
           (p[0].handle_right - p[0].co).length)
     check("the curve keeps its incoming handle", (p[0].handle_left - p[0].co).length > 0.01,
           (p[0].handle_left - p[0].co).length)
     check("handles and points are drawn", bool(drawn) and drawn[-1] == 2, drawn[-3:])
-    check("the last dragged vertex draws both handles", curves_out[:1] == [True], curves_out)
+    check("the last dragged vertex draws both handles", shows_out[:1] == [True], shows_out)
     if SHOT:
         with bpy.context.temp_override(window=window, area=area):
             bpy.ops.screen.screenshot_area(filepath=SHOT + "_preview.png")
@@ -111,6 +111,16 @@ def steps():
             bpy.ops.screen.screenshot_area(filepath=SHOT + "_drag.png")
     mouse('LEFTMOUSE', 'RELEASE', C2)
     yield
+    # A dragged vertex that follows a placed one: its incoming curve stays, the way on stays straight.
+    mouse('MOUSEMOVE', 'NOTHING', B)
+    yield
+    yield
+    p = points()
+    check("the made curve keeps its incoming handle", (p[2].handle_left - p[2].co).length > 0.01,
+          (p[2].handle_left - p[2].co).length)
+    check("the way on stays straight", (p[2].handle_right - p[2].co).length < 1e-6,
+          (p[2].handle_right - p[2].co).length)
+    check("and draws both handles", shows_out[2:3] == [True], shows_out)
     mouse('RIGHTMOUSE', 'PRESS', C2)
     yield
     mouse('RIGHTMOUSE', 'RELEASE', C2)
@@ -118,6 +128,8 @@ def steps():
     p = points()
     check("the finished line has 3 points", len(p) == 3, len(p))
     check("its first segment is still straight", (p[0].handle_right - p[0].co).length < 1e-6)
+    check("the last vertex has both handles", (p[2].handle_right - p[2].co).length > 0.01 and
+          (p[2].handle_left - p[2].co).length > 0.01)
     check("the handler is gone after the tool ends", not spline_tools.tool_state.is_running("maximize.line"))
     count = len(drawn)
     area.tag_redraw()

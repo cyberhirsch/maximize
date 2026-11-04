@@ -535,10 +535,15 @@ class MAXIMIZE_OT_line(Operator):
     @staticmethod
     def _curves_out(points, index):
         """A dragged vertex's outgoing handle only counts if the next vertex is dragged too (Seb):
-        a plain click after a curve gives a straight segment. The point still following the mouse
-        isn't placed yet, so the preview curves toward it."""
+        a plain click after a curve gives a straight segment, and so does the preview."""
         following = points[index + 1:index + 2]
-        return not following or following[0][1] is not None or following[0][2] == _FOLLOWING
+        return not following or following[0][1] is not None
+
+    @classmethod
+    def _shows_out(cls, points, index):
+        """The handle stays visible while the next point still follows the mouse: a drag there uses it."""
+        following = points[index + 1:index + 2]
+        return cls._curves_out(points, index) or following[0][2] == _FOLLOWING
 
     def _vertices(self, points, matrix=None):
         out = []
@@ -557,7 +562,7 @@ class MAXIMIZE_OT_line(Operator):
             if kind != 'BEZIER' or handle is None:
                 continue
             ends = [co - (handle - co)]
-            if self._curves_out(self._shown, index):
+            if self._shows_out(self._shown, index):
                 ends.append(handle)
             for end in ends:
                 tips.append(tuple(end))
