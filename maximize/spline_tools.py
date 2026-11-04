@@ -12,9 +12,11 @@ Shapes are treated as lying in their object's local XY plane, as Max's shapes do
 import math
 
 import bpy
+import gpu
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
 from bpy.types import Operator
 from bpy_extras import view3d_utils
+from gpu_extras.batch import batch_for_shader
 from mathutils import Vector
 from mathutils.geometry import intersect_line_plane
 
@@ -442,6 +444,9 @@ LINE_TYPES = (
     ('BEZIER', "Bezier", "Smooth vertex whose handles follow the drag"),
 )
 
+_VERTEX_COLOR = (1.0, 1.0, 1.0, 1.0)
+_HANDLE_COLOR = (1.0, 0.55, 0.1, 1.0)
+
 
 class MAXIMIZE_OT_line(Operator):
     """Line, as in Max: click for Initial Type vertices, drag for Drag Type vertices; Shift keeps
@@ -476,6 +481,8 @@ class MAXIMIZE_OT_line(Operator):
         self._press = None     # (co, mouse) where the button went down
         self._drag = None
         self._region = None
+        self._shown = []       # what _draw shows: the fixed points and the one being placed
+        self._handle = bpy.types.SpaceView3D.draw_handler_add(self._draw, (), 'WINDOW', 'POST_VIEW')
         context.window_manager.modal_handler_add(self)
         tool_state.begin(context)
         context.workspace.status_text_set("Line: click for corners, drag for curves, click the first point "
@@ -515,22 +522,73 @@ class MAXIMIZE_OT_line(Operator):
         p = view3d_utils.location_3d_to_region_2d(self._region, self._region.data, co)
         return p if p is not None else Vector((1e9, 1e9))
 
-    def _vertex(self, co, handle, kind):
+    def _vertex(self, co, handle, kind, curve_out=True):
         if kind == 'BEZIER' and handle is not None:
+            if not curve_out:
+                return _Point(co, co - (handle - co), co, 'FREE', 'FREE')
             return _Point(co, co - (handle - co), handle, 'ALIGNED', 'ALIGNED')
         if kind == 'SMOOTH':
             return _Point(co, co, co, 'AUTO', 'AUTO')
         return _Point(co)
 
+    @staticmethod
+    def _curves_out(points, index):
+        """A dragged vertex's outgoing handle only counts if the next vertex is dragged too (Seb):
+        a plain click after a curve gives a straight segment, in the preview as well."""
+        following = points[index + 1:index + 2]
+        return not following or following[0][1] is not None
+
+    def _vertices(self, points, matrix=None):
+        out = []
+        for index, (co, handle, kind) in enumerate(points):
+            if matrix is not None:
+                co = matrix @ co
+                handle = None if handle is None else matrix @ handle
+            out.append(self._vertex(co, handle, kind, self._curves_out(points, index)))
+        return out
+
+    def _draw(self):
+        """The vertices and the handles in use while drawing; a shape only shows them in Edit Mode."""
+        vertices, tips, lines = [], [], []
+        for index, (co, handle, kind) in enumerate(self._shown):
+            vertices.append(tuple(co))
+            if kind != 'BEZIER' or handle is None:
+                continue
+            ends = [co - (handle - co)]
+            if self._curves_out(self._shown, index):
+                ends.append(handle)
+            for end in ends:
+                tips.append(tuple(end))
+                lines += [tuple(co), tuple(end)]
+        gpu.state.depth_test_set('NONE')
+        if lines:
+            shader = gpu.shader.from_builtin('POLYLINE_UNIFORM_COLOR')
+            shader.uniform_float("viewportSize", gpu.state.viewport_get()[2:])
+            shader.uniform_float("lineWidth", 1.5)
+            shader.uniform_float("color", _HANDLE_COLOR)
+            batch_for_shader(shader, 'LINES', {"pos": lines}).draw(shader)
+        shader = gpu.shader.from_builtin('POINT_UNIFORM_COLOR')
+        for points, color, size in ((tips, _HANDLE_COLOR, 6.0), (vertices, _VERTEX_COLOR, 8.0)):
+            if points:
+                gpu.state.point_size_set(size)
+                shader.uniform_float("color", color)
+                batch_for_shader(shader, 'POINTS', {"pos": points}).draw(shader)
+        gpu.state.point_size_set(1.0)
+
+    def _remove_draw(self):
+        bpy.types.SpaceView3D.draw_handler_remove(self._handle, 'WINDOW')
+
+    def cancel(self, _context):
+        self._remove_draw()
+
     def _rebuild(self, context, points):
         """Write `points` [(co, handle or None, type)] into the line's spline."""
+        self._shown = points
         if self._target is not None:
             curve = self._target.data
             for spline in list(curve.splines)[self._keep:]:
                 curve.splines.remove(spline)
-            local = self._target.matrix_world.inverted()
-            return _write(curve, None, [self._vertex(local @ co, None if h is None else local @ h, k)
-                                        for co, h, k in points], cyclic=False)
+            return _write(curve, None, self._vertices(points, self._target.matrix_world.inverted()), cyclic=False)
         if self._obj is None:
             data = bpy.data.curves.new("Line", 'CURVE')
             data.dimensions = '3D'
@@ -545,10 +603,12 @@ class MAXIMIZE_OT_line(Operator):
             context.view_layer.objects.active = self._obj
         curve = self._obj.data
         curve.splines.clear()
-        _write(curve, None, [self._vertex(co, h, k) for co, h, k in points], cyclic=False)
+        _write(curve, None, self._vertices(points), cyclic=False)
         return curve.splines[0]
 
     def _finish(self, context, close=False):
+        self._remove_draw()
+        context.area.tag_redraw()
         tool_state.end(context)
         context.workspace.status_text_set(None)
         if len(self._points) < 2:

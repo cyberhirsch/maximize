@@ -160,8 +160,9 @@ class _FakeLine:
     _points = [(Vector((0, 0, 0)), None, 'CORNER'), (Vector((1, 0, 0)), Vector((1.5, 0.5, 0)), 'BEZIER'),
                (Vector((1, 1, 0)), None, 'CORNER')]
 
-    def _vertex(self, co, handle, kind):
-        return MAXIMIZE_OT_line._vertex(self, co, handle, kind)
+    _vertex = MAXIMIZE_OT_line._vertex
+    _vertices = MAXIMIZE_OT_line._vertices
+    _curves_out = staticmethod(MAXIMIZE_OT_line._curves_out)
 
 
 fake = _FakeLine()
@@ -169,7 +170,8 @@ MAXIMIZE_OT_line._rebuild(fake, ctx, fake._points)
 line = fake._obj
 bp = line.data.splines[0].bezier_points
 check("line", line.name.startswith("Line") and len(bp) == 3 and bp[0].handle_left_type == 'VECTOR' and
-      bp[1].handle_left_type == 'ALIGNED' and (bp[1].handle_left - Vector((0.5, -0.5, 0))).length < 1e-5,
+      bp[1].handle_left_type == 'FREE' and (bp[1].handle_left - Vector((0.5, -0.5, 0))).length < 1e-5 and
+      (bp[1].handle_right - bp[1].co).length < 1e-5,
       line.name, len(bp))
 
 # Trim and Extend on straight and curved splines.
