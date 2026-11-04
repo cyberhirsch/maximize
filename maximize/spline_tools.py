@@ -446,6 +446,7 @@ LINE_TYPES = (
 
 _VERTEX_COLOR = (1.0, 1.0, 1.0, 1.0)
 _HANDLE_COLOR = (1.0, 0.55, 0.1, 1.0)
+_FOLLOWING = 'FOLLOWING'  # Line: the point still following the mouse; written as a corner
 
 
 class MAXIMIZE_OT_line(Operator):
@@ -534,9 +535,10 @@ class MAXIMIZE_OT_line(Operator):
     @staticmethod
     def _curves_out(points, index):
         """A dragged vertex's outgoing handle only counts if the next vertex is dragged too (Seb):
-        a plain click after a curve gives a straight segment, in the preview as well."""
+        a plain click after a curve gives a straight segment. The point still following the mouse
+        isn't placed yet, so the preview curves toward it."""
         following = points[index + 1:index + 2]
-        return not following or following[0][1] is not None
+        return not following or following[0][1] is not None or following[0][2] == _FOLLOWING
 
     def _vertices(self, points, matrix=None):
         out = []
@@ -666,7 +668,7 @@ class MAXIMIZE_OT_line(Operator):
             kind = self.initial_type if self._drag is None else self.drag_type
             self._points.append((self._press[0], self._drag, kind))
             self._press = self._drag = None
-            self._rebuild(context, self._points + [(hit, None, 'CORNER')])
+            self._rebuild(context, self._points + [(hit, None, _FOLLOWING)])
         elif event.type == 'MOUSEMOVE':
             if self._press is not None:
                 if (mouse - self._press[1]).length > 4:
@@ -674,7 +676,7 @@ class MAXIMIZE_OT_line(Operator):
                 kind = self.initial_type if self._drag is None else self.drag_type
                 self._rebuild(context, self._points + [(self._press[0], self._drag, kind)])
             elif self._points:
-                self._rebuild(context, self._points + [(hit, None, 'CORNER')])
+                self._rebuild(context, self._points + [(hit, None, _FOLLOWING)])
         context.area.tag_redraw()
         return {'RUNNING_MODAL'}
 

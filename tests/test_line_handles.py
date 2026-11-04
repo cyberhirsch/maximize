@@ -1,6 +1,6 @@
 # Run: moritz.exe --factory-startup --enable-event-simulate --python tests/test_line_handles.py
-# Line: a dragged vertex shows its handles, and a plain click after it gives a straight segment, in
-# the preview and in the result; a second drag curves the segment between the two.
+# Line: a dragged vertex shows both handles and the preview curves toward the mouse; a plain click
+# placed after it gives a straight segment; a second drag curves the segment between the two.
 import os
 import sys
 
@@ -15,11 +15,13 @@ from maximize import spline_tools
 failures = []
 SHOT = os.environ.get("MX_SHOT")
 drawn = []
+curves_out = []
 real_draw = spline_tools.MAXIMIZE_OT_line._draw
 
 
 def counted_draw(self):
     drawn.append(len(self._shown))
+    curves_out[:] = [self._curves_out(self._shown, index) for index in range(len(self._shown))]
     real_draw(self)
 
 
@@ -70,20 +72,21 @@ def steps():
     yield
     mouse('LEFTMOUSE', 'RELEASE', A2)
     yield
-    # Toward the next point: the preview runs straight.
+    # Toward the next point: the preview curves.
     mouse('MOUSEMOVE', 'NOTHING', B)
     yield
     yield
     p = points()
     check("two points in the preview", len(p) == 2, len(p))
-    check("the preview leaves the curve straight", (p[0].handle_right - p[0].co).length < 1e-6,
+    check("the preview curves toward the mouse", (p[0].handle_right - p[0].co).length > 0.01,
           (p[0].handle_right - p[0].co).length)
     check("the curve keeps its incoming handle", (p[0].handle_left - p[0].co).length > 0.01,
           (p[0].handle_left - p[0].co).length)
     check("handles and points are drawn", bool(drawn) and drawn[-1] == 2, drawn[-3:])
+    check("the last dragged vertex draws both handles", curves_out[:1] == [True], curves_out)
     if SHOT:
         with bpy.context.temp_override(window=window, area=area):
-            bpy.ops.screen.screenshot_area(filepath=SHOT + "_straight.png")
+            bpy.ops.screen.screenshot_area(filepath=SHOT + "_preview.png")
     # A plain click, then a drag: the segment between them curves, with the first point's handle back.
     mouse('LEFTMOUSE', 'PRESS', B)
     yield
@@ -91,6 +94,8 @@ def steps():
     yield
     p = points()
     check("a click stays a corner", p[1].handle_left_type == 'VECTOR', p[1].handle_left_type)
+    check("a placed click makes the segment before it straight", (p[0].handle_right - p[0].co).length < 1e-6,
+          (p[0].handle_right - p[0].co).length)
     mouse('MOUSEMOVE', 'NOTHING', C)
     yield
     mouse('LEFTMOUSE', 'PRESS', C)
