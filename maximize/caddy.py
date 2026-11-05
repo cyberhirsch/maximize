@@ -23,6 +23,8 @@ from bpy.props import (
 )
 from bpy.types import Operator, PropertyGroup
 
+from . import tool_state
+
 # Tools whose caddy runs another operator: Chamfer's button is interactive, its caddy is Bevel's.
 _CADDY_TOOL = {
     "maximize.chamfer": ("mesh.bevel", lambda context: {
@@ -60,7 +62,8 @@ def has_settings(idname):
 
 
 def tool_button(layout, context, idname, **kwargs):
-    """The tool's button; in caddy mode a settings button (Max's small square) follows it."""
+    """The tool's button, lit while it runs; in caddy mode a settings button (Max's small square) follows it."""
+    kwargs.setdefault("depress", tool_state.is_running(idname))
     if not (use_caddy(context) and has_settings(idname)):
         layout.operator(idname, **kwargs)
         return

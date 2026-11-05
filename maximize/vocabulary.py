@@ -15,6 +15,8 @@ show up in F3 menu search under both keymaps.
 import bpy
 from bpy.types import Operator
 
+from . import tool_state
+
 
 # ------------------------------------------------------------------------------
 # Max English
@@ -287,6 +289,10 @@ def view3d_override(context):
     return {"window": window, "area": area, "region": region} if region else None
 
 
+# Their poll passes in the Command Panel, where they need a 3D View to run as tools.
+_VIEWPORT_TOOLS = {"mesh.bisect", "mesh.inset"}
+
+
 def _alias_class(ident, label, target, props, description):
     module, name = target.split(".")
 
@@ -294,16 +300,16 @@ def _alias_class(ident, label, target, props, description):
         return getattr(getattr(bpy.ops, module), name)
 
     def finished(result):
+        if 'RUNNING_MODAL' in result:
+            tool_state.watch("maximize." + ident, target)
         return {'FINISHED'} if result & {'FINISHED', 'RUNNING_MODAL'} else {'CANCELLED'}
 
     def run(context, mode):
         op = target_op()
-        if not op.poll():
+        if target in _VIEWPORT_TOOLS or not op.poll():
             # From a panel button: a viewport tool (Cut, Paint Connect) runs in the 3D View.
-            override = view3d_override(context)
-            if override is not None:
-                with context.temp_override(**override):
-                    return finished(op(mode, **props))
+            with context.temp_override(**tool_state.viewport(context)):
+                return finished(op(mode, **props))
         return finished(op(mode, **props))
 
     def poll(cls, context):

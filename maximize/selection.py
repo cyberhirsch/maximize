@@ -16,6 +16,8 @@ from bpy.props import (
 )
 from bpy.types import Operator, PropertyGroup, UIList
 
+from . import tool_state
+
 
 # ------------------------------------------------------------------------------
 # Sub-object levels
@@ -228,7 +230,10 @@ class MAXIMIZE_OT_chamfer(Operator):
 
     def invoke(self, context, _event):
         affect = 'VERTICES' if context.tool_settings.mesh_select_mode[0] else 'EDGES'
-        bpy.ops.mesh.bevel('INVOKE_DEFAULT', affect=affect)
+        with context.temp_override(**tool_state.viewport(context)):
+            result = bpy.ops.mesh.bevel('INVOKE_DEFAULT', affect=affect)
+        if 'RUNNING_MODAL' in result:
+            tool_state.watch("maximize.chamfer", "mesh.bevel")
         return {'FINISHED'}
 
 

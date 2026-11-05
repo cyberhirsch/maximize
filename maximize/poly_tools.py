@@ -475,8 +475,13 @@ class MAXIMIZE_OT_extrude_along_spline(_EditMesh, Operator):
 
 def _pick_edge(context, event, edges, matrix):
     """The edge of `edges` nearest the mouse on screen, with the parameter 0..1 along it."""
-    region, rv3d = context.region, context.region_data
-    mouse = Vector((event.mouse_region_x, event.mouse_region_y))
+    # The view under the mouse: a tool started from a panel can be clicked in any of the four views.
+    region = next((r for r in context.area.regions if r.type == 'WINDOW' and
+                   r.x <= event.mouse_x < r.x + r.width and r.y <= event.mouse_y < r.y + r.height), None)
+    if region is None:
+        return None, None
+    rv3d = region.data
+    mouse = Vector((event.mouse_x - region.x, event.mouse_y - region.y))
     best = None
     for e in edges:
         a, b = (view3d_utils.location_3d_to_region_2d(region, rv3d, matrix @ v.co) for v in e.verts)
@@ -497,12 +502,15 @@ class _PickEdgeOperator:
 
     @classmethod
     def poll(cls, context):
-        return context.mode == 'EDIT_MESH' and context.area is not None and context.area.type == 'VIEW_3D'
+        return context.mode == 'EDIT_MESH' and tool_state.can_click_in_viewport(context)
 
     def candidates(self, bm):
         return bm.edges
 
     def invoke(self, context, event):
+        restarted = tool_state.start_in_viewport(self, context)
+        if restarted:
+            return restarted
         context.workspace.status_text_set(self.hint + " (Esc / right-click: done)")
         context.window_manager.modal_handler_add(self)
         tool_state.begin(context)

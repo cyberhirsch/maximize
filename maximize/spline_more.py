@@ -137,9 +137,12 @@ class MAXIMIZE_OT_spline_insert(Operator):
 
     @classmethod
     def poll(cls, context):
-        return context.mode == 'EDIT_CURVE' and context.area is not None and context.area.type == 'VIEW_3D'
+        return context.mode == 'EDIT_CURVE' and tool_state.can_click_in_viewport(context)
 
     def invoke(self, context, _event):
+        restarted = tool_state.start_in_viewport(self, context)
+        if restarted:
+            return restarted
         context.window_manager.modal_handler_add(self)
         tool_state.begin(context)
         context.workspace.status_text_set("Insert: click on a segment, then move the new vertex")
@@ -181,14 +184,20 @@ class MAXIMIZE_OT_spline_create_line(Operator):
 
     @classmethod
     def poll(cls, context):
-        return context.mode == 'EDIT_CURVE'
+        # Lit while its line is drawn in Object Mode.
+        return context.mode == 'EDIT_CURVE' or tool_state.is_running("maximize.line", start_new_shape=False)
 
     def execute(self, context):
+        if context.mode != 'EDIT_CURVE':
+            return {'CANCELLED'}
         obj = context.edit_object
+        override = tool_state.viewport(context)
         bpy.ops.object.mode_set(mode='OBJECT')
         obj.select_set(True)
         context.view_layer.objects.active = obj
-        return bpy.ops.maximize.line('INVOKE_DEFAULT', start_new_shape=False)
+        with context.temp_override(**override):
+            bpy.ops.maximize.line('INVOKE_DEFAULT', start_new_shape=False)
+        return {'FINISHED'}
 
 
 # ------------------------------------------------------------------------------

@@ -306,9 +306,7 @@ def draw_object_types(layout, context, category):
         # Dragged out like V-Ray's lights, then Blender's (placed at the 3D cursor).
         grid = group()
         for ident, label, _desc, icon in lights.SHAPES:
-            op = grid.operator("maximize.create_in_viewport", text=label, icon=icon)
-            op.operator = "maximize.add_light"
-            op.kind = ident
+            _create_button(grid, "maximize.add_light", label, icon, ident)
         col.separator(factor=0.5)
         grid = group()
         grid.operator_context = 'INVOKE_REGION_WIN'
@@ -672,6 +670,11 @@ def draw_spline_rollouts(layout, context, obj, key, base):
         body = rollout(layout, key + "_geometry", "Geometry")
         if body:
             draw_spline_geometry(body, context, obj)
+    elif tool_state.is_running("maximize.line", start_new_shape=False):
+        # Create Line draws in Object Mode, where the rollout is gone: its button stays, lit.
+        body = rollout(layout, key + "_geometry", "Geometry")
+        if body:
+            body.operator("maximize.spline_create_line", depress=True)
 
 
 def draw_base(layout, context):

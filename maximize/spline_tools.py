@@ -1047,9 +1047,12 @@ class _PickSpline:
 
     @classmethod
     def poll(cls, context):
-        return context.mode == 'EDIT_CURVE' and context.area is not None and context.area.type == 'VIEW_3D'
+        return context.mode == 'EDIT_CURVE' and tool_state.can_click_in_viewport(context)
 
     def invoke(self, context, _event):
+        restarted = tool_state.start_in_viewport(self, context)
+        if restarted:
+            return restarted
         context.window_manager.modal_handler_add(self)
         tool_state.begin(context)
         context.workspace.status_text_set(self.status)
